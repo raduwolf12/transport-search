@@ -191,6 +191,26 @@ function normalizeHafasTrip(trip, i, provider) {
 // queries via an OpenTripPlanner-backed routing API — coverage varies feed by
 // feed, so this can come back empty even for a real route; that's expected.
 const TRANSITLAND_SETTINGS_KEY = 'transitland_api_key'
+// Self-imposed courtesy cap, independent of whatever quota the user's own
+// Transitland account has — counts actual outbound requests to transit.land
+// (each search makes up to 3: 2 stop lookups + 1 plan call).
+const TRANSITLAND_MONTHLY_CAP = 10000
+
+// Persisted in the plugin's own SQLite (survives restarts). Increments first,
+// then checks — a tiny race between concurrent calls can overshoot by a
+// request or two, which is fine for a soft courtesy cap.
+async function transitlandQuotaConsume(ctx) {
+  await ctx.db.migrate('transitland_quota_v1', 'CREATE TABLE IF NOT EXISTS transitland_quota (month TEXT PRIMARY KEY, count INTEGER NOT NULL)')
+  const month = new Date().toISOString().slice(0, 7) // 'YYYY-MM'
+  await ctx.db.exec(
+    'INSERT INTO transitland_quota (month, count) VALUES (?, 1) ON CONFLICT(month) DO UPDATE SET count = count + 1',
+    month,
+  )
+  const rows = await ctx.db.query('SELECT count FROM transitland_quota WHERE month = ?', month)
+  if ((rows[0]?.count || 0) > TRANSITLAND_MONTHLY_CAP) {
+    throw new Error(`Transitland monthly request cap (${TRANSITLAND_MONTHLY_CAP}) reached for ${month} — try again next month`)
+  }
+}
 
 // OTP's `startTime`/`endTime` are UTC epoch-ms with no timezone field in the
 // response at all — this maps a same-country query to its one dominant IANA
@@ -227,6 +247,7 @@ const OTP_MODE_MAP = {
 function mapOtpMode(mode) { return OTP_MODE_MAP[(mode || '').toUpperCase()] || 'Bus' }
 
 async function transitlandStopSearch(name, apiKey, ctx) {
+  await transitlandQuotaConsume(ctx)
   const url = `https://transit.land/api/v2/rest/stops?search=${encodeURIComponent(name)}&limit=5&api_key=${encodeURIComponent(apiKey)}`
   const res = await fetch(url)
   if (!res.ok) throw new Error(`Transitland stops HTTP ${res.status}`)
@@ -239,7 +260,8 @@ async function transitlandStopSearch(name, apiKey, ctx) {
   return { name: hit.stop_name, lat, lon, countryCode: hit.place?.adm0_iso || null }
 }
 
-async function transitlandPlan(fromLat, fromLon, toLat, toLon, date, time, apiKey) {
+async function transitlandPlan(fromLat, fromLon, toLat, toLon, date, time, apiKey, ctx) {
+  await transitlandQuotaConsume(ctx)
   const url = `https://transit.land/api/v2/routing/otp/plan?fromPlace=${fromLat},${fromLon}&toPlace=${toLat},${toLon}` +
     `&date=${encodeURIComponent(date)}&time=${encodeURIComponent(time || '08:00:00')}&api_key=${encodeURIComponent(apiKey)}`
   const res = await fetch(url)
@@ -433,7 +455,7 @@ module.exports = definePlugin({
             return safeJson(200, { trips: [], error: `stop lookup failed (${!origin ? `origin "${fromName}"` : `destination "${toName}"`} had no match)` })
           }
 
-          const itineraries = await transitlandPlan(origin.lat, origin.lon, dest.lat, dest.lon, date, time, tlKey)
+          const itineraries = await transitlandPlan(origin.lat, origin.lon, dest.lat, dest.lon, date, time, tlKey, ctx)
           return safeJson(200, { trips: itineraries.map((it, i) => normalizeTransitlandTrip(it, i, fc)), source: 'transitland' })
         } catch (e) {
           return safeJson(200, { trips: [], error: e.message })
