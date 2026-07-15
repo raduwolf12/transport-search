@@ -25,10 +25,17 @@ async function fetchJson(url, _ctx) {
   return res.json()
 }
 
-// ── Trafiklab / ResRobot (supplemental Swedish domestic transit) ───────────
-// Traveling.com's own train coverage inside Sweden is sometimes thin; ResRobot
-// covers all Swedish public transport (train/bus/metro/tram/ferry) and is used
-// here strictly as a same-country fallback/supplement, not a replacement.
+// ── Supplemental Nordic domestic transit (Trafiklab/ResRobot for Sweden,
+// Rejseplanen for Denmark) ──────────────────────────────────────────────────
+// Traveling.com's own train coverage inside Sweden/Denmark is sometimes thin;
+// both providers cover their whole country's public transport (train/bus/
+// metro/tram/ferry) and are used here strictly as a same-country fallback/
+// supplement, not a replacement — and both happen to be the same underlying
+// HAFAS REST dialect, so they share all the parsing below.
+const HAFAS_PROVIDERS = {
+  trafiklab: { source: 'trafiklab', baseUrl: 'https://api.resrobot.se/v2.1', settingsKey: 'trafiklab_api_key', countryCode: 'SE', attribution: 'Trafiklab.se' },
+  rejseplanen: { source: 'rejseplanen', baseUrl: 'https://www.rejseplanen.dk/api', settingsKey: 'rejseplanen_api_key', countryCode: 'DK', attribution: 'Rejseplanen (rejseplanen.dk)' },
+}
 
 // "PT2H15M" / "PT45M" -> minutes
 function parseIsoDuration(iso) {
@@ -38,45 +45,50 @@ function parseIsoDuration(iso) {
   return Number(m[1] || 0) * 60 + Number(m[2] || 0)
 }
 
-function resRobotDateTimeToStr(date, time) {
+function hafasDateTimeToStr(date, time) {
   if (!date) return null
   const t = time || '00:00:00'
   return `${date} ${t.length === 5 ? t + ':00' : t}`
 }
 
-// catOut/product naming is a HAFAS convention that varies a bit by region —
-// this is a best-effort keyword mapping onto this plugin's existing mode
-// vocabulary (Flight/Bus/Train/Transfer/Ferry), not an exhaustive enum.
-function mapResRobotMode(product) {
+// catOut/product naming is a HAFAS convention that varies a bit by region and
+// language (sv/da) — this is a best-effort keyword mapping onto this plugin's
+// existing mode vocabulary (Flight/Bus/Train/Transfer/Ferry), not an
+// exhaustive enum.
+function mapHafasMode(product) {
   const name = ((product?.catOutL || product?.name || product?.catOut || '') + '').toLowerCase()
-  if (/tåg|train|pendel|regional|snabb|express/.test(name)) return 'Train'
-  if (/tunnelbana|metro|subway|spårvagn|tram/.test(name)) return 'Transfer'
-  if (/färja|ferry|båt|boat/.test(name)) return 'Ferry'
-  if (/flyg|air|flight/.test(name)) return 'Flight'
+  if (/tåg|tog|train|pendel|regional|snabb|intercity|lyn|express/.test(name)) return 'Train'
+  if (/tunnelbana|metro|subway|spårvagn|letbane|tram/.test(name)) return 'Transfer'
+  if (/färja|ferry|båt|boat|færge/.test(name)) return 'Ferry'
+  if (/flyg|fly\b|air|flight/.test(name)) return 'Flight'
   return 'Bus'
 }
 
 // Traveling.com's own place data is transliterated to ASCII ("Malmo",
-// "Goteborg"), but ResRobot's stop database is spelled natively ("Malmö",
-// "Göteborg") — an unrestored name can miss even with fuzzy matching. Small
-// fixup table for the common cases; extend as more come up.
-const NORDIC_DIACRITIC_FIX = {
+// "Goteborg", "Copenhagen"), but these HAFAS stop databases are spelled
+// natively ("Malmö", "Göteborg", "København") — an unrestored name can miss
+// even with fuzzy matching. Small fixup table for the common cases across
+// both countries; extend as more come up.
+const NORDIC_NAME_FIX = {
   malmo: 'Malmö', goteborg: 'Göteborg', gothenburg: 'Göteborg', orebro: 'Örebro',
   umea: 'Umeå', vasteras: 'Västerås', jonkoping: 'Jönköping', linkoping: 'Linköping',
   norrkoping: 'Norrköping', ornskoldsvik: 'Örnsköldsvik', skovde: 'Skövde',
   vaxjo: 'Växjö', ostersund: 'Östersund', gavle: 'Gävle', boras: 'Borås',
   molndal: 'Mölndal', harnosand: 'Härnösand', sodertalje: 'Södertälje',
   hassleholm: 'Hässleholm', angelholm: 'Ängelholm',
+  copenhagen: 'København', kobenhavn: 'København', koebenhavn: 'København',
+  elsinore: 'Helsingør', helsingor: 'Helsingør', koge: 'Køge', naestved: 'Næstved',
+  sonderborg: 'Sønderborg', nykobing: 'Nykøbing', ronne: 'Rønne', arhus: 'Aarhus',
 }
 
 // These HAFAS-derived JSON APIs commonly collapse a single-element array to a
 // bare object (a leftover of their XML origins) — normalize either shape.
 function toArray(x) { return x == null ? [] : Array.isArray(x) ? x : [x] }
 
-async function resRobotLocationNameRaw(input, apiKey, ctx, label) {
-  const url = `https://api.resrobot.se/v2.1/location.name?input=${encodeURIComponent(input)}&format=json&accessId=${encodeURIComponent(apiKey)}`
+async function hafasLocationNameRaw(baseUrl, input, apiKey, ctx, label) {
+  const url = `${baseUrl}/location.name?input=${encodeURIComponent(input)}&format=json&accessId=${encodeURIComponent(apiKey)}`
   const res = await fetch(url)
-  if (!res.ok) throw new Error(`ResRobot location.name HTTP ${res.status}`)
+  if (!res.ok) throw new Error(`HAFAS location.name HTTP ${res.status}`)
   const data = await res.json()
   // Real (observed live) shape: { stopLocationOrCoordLocation: [{ StopLocation: {...} }, ...] }
   // at the ROOT — no "LocationList" wrapper, despite some docs implying one.
@@ -85,51 +97,52 @@ async function resRobotLocationNameRaw(input, apiKey, ctx, label) {
     .map(x => x?.StopLocation || x).filter(Boolean)
   const flat = toArray(data?.StopLocation ?? data?.LocationList?.StopLocation)
   const stops = flat.length ? flat : nested
-  ctx?.log?.info?.(`ResRobot location.name(${label}="${input}"): ${stops.length} hit(s), raw keys: ${Object.keys(data || {}).join(',')}`)
+  ctx?.log?.info?.(`HAFAS location.name(${baseUrl}, ${label}="${input}"): ${stops.length} hit(s), raw keys: ${Object.keys(data || {}).join(',')}`)
   return stops[0] || null
 }
 
-async function resRobotLocationSearch(name, apiKey, ctx) {
+async function hafasLocationSearch(baseUrl, name, apiKey, ctx) {
   // Trailing "?" turns on fuzzy/substring matching. Try that, then an exact
   // match, then — if this is a name known to lose a diacritic in transit —
   // the same two attempts with the diacritic restored.
-  const fixed = NORDIC_DIACRITIC_FIX[name.trim().toLowerCase()]
+  const fixed = NORDIC_NAME_FIX[name.trim().toLowerCase()]
   const attempts = fixed ? [name + '?', name, fixed + '?', fixed] : [name + '?', name]
   for (const input of attempts) {
-    const hit = await resRobotLocationNameRaw(input, apiKey, ctx, name)
+    const hit = await hafasLocationNameRaw(baseUrl, input, apiKey, ctx, name)
     if (hit) return hit
   }
   return null
 }
 
-async function resRobotTrip(originId, destId, date, time, apiKey) {
-  const url = `https://api.resrobot.se/v2.1/trip?format=json&originId=${encodeURIComponent(originId)}&destId=${encodeURIComponent(destId)}` +
+async function hafasTrip(baseUrl, originId, destId, date, time, apiKey) {
+  const url = `${baseUrl}/trip?format=json&originId=${encodeURIComponent(originId)}&destId=${encodeURIComponent(destId)}` +
     `&date=${encodeURIComponent(date)}${time ? `&time=${encodeURIComponent(time)}` : ''}&accessId=${encodeURIComponent(apiKey)}`
   const res = await fetch(url)
-  if (!res.ok) throw new Error(`ResRobot trip HTTP ${res.status}`)
+  if (!res.ok) throw new Error(`HAFAS trip HTTP ${res.status}`)
   const data = await res.json()
   return toArray(data?.TripList?.Trip || data?.Trip)
 }
 
-function resRobotPlace(o) {
+function hafasPlace(o, countryCode) {
   if (!o) return null
-  return { id: null, name: o.name, nameFull: o.name, code: null, countryCode: 'SE', lat: o.lat, lng: o.lon }
+  return { id: null, name: o.name, nameFull: o.name, code: null, countryCode, lat: o.lat, lng: o.lon }
 }
 
-function normalizeResRobotTrip(trip, i) {
+function normalizeHafasTrip(trip, i, provider) {
   const legs = toArray(trip?.LegList?.Leg)
   const realLegs = legs.filter(l => toArray(l?.Product).length)
   const origin = trip?.Origin || {}
   const destination = trip?.Destination || {}
+  const cc = provider.countryCode
 
   const segments = realLegs.map(leg => {
     const product = toArray(leg.Product)[0] || {}
     return {
-      depTime: resRobotDateTimeToStr(leg.Origin?.date, leg.Origin?.time),
-      arrTime: resRobotDateTimeToStr(leg.Destination?.date, leg.Destination?.time),
+      depTime: hafasDateTimeToStr(leg.Origin?.date, leg.Origin?.time),
+      arrTime: hafasDateTimeToStr(leg.Destination?.date, leg.Destination?.time),
       durationMin: parseIsoDuration(leg.duration),
-      from: resRobotPlace(leg.Origin),
-      to: resRobotPlace(leg.Destination),
+      from: hafasPlace(leg.Origin, cc),
+      to: hafasPlace(leg.Destination, cc),
       operator: product.operator || null,
       flightNo: product.line || null,
       class: null,
@@ -147,28 +160,28 @@ function normalizeResRobotTrip(trip, i) {
   segments.forEach(s => { if (s.operator && !operators.find(o => o.name === s.operator)) operators.push({ id: null, name: s.operator, logo: null, rating: null }) })
 
   return {
-    id: 'tl-' + i,
+    id: provider.source + '-' + i,
     tripKey: null,
     isBookable: false,
     vehclass: 'transit',
-    mode: mapResRobotMode(toArray(realLegs[0]?.Product)[0]),
-    depTime: resRobotDateTimeToStr(origin.date, origin.time),
-    arrTime: resRobotDateTimeToStr(destination.date, destination.time),
+    mode: mapHafasMode(toArray(realLegs[0]?.Product)[0]),
+    depTime: hafasDateTimeToStr(origin.date, origin.time),
+    arrTime: hafasDateTimeToStr(destination.date, destination.time),
     durationMin: parseIsoDuration(trip?.duration),
-    from: resRobotPlace(origin),
-    to: resRobotPlace(destination),
+    from: hafasPlace(origin, cc),
+    to: hafasPlace(destination, cc),
     operators,
     price: { value: null, currency: null, display: null },
     class: null,
     seats: null,
     isRefundable: false,
-    features: [{ key: 'source_trafiklab', text: 'Data from Trafiklab.se', type: 'default', variant: 'info' }],
+    features: [{ key: 'source_' + provider.source, text: 'Data from ' + provider.attribution, type: 'default', variant: 'info' }],
     segments,
     layovers,
     isMultiSegment: segments.length > 1,
     addToCartParams: null,
     logoPath: null,
-    source: 'trafiklab',
+    source: provider.source,
   }
 }
 
@@ -248,7 +261,8 @@ module.exports = definePlugin({
       },
     },
 
-    // ── Supplemental Swedish transit search (Trafiklab / ResRobot) ─────────────
+    // ── Supplemental Nordic domestic transit search (Trafiklab for Sweden,
+    // Rejseplanen for Denmark) ──────────────────────────────────────────────────
     {
       method: 'GET',
       path: '/transit-search',
@@ -257,26 +271,27 @@ module.exports = definePlugin({
         const { fromName, toName, fromCountry, toCountry, date, time } = req.query
         if (!fromName || !toName || !date) return safeJson(200, { trips: [] })
 
-        const apiKey = await ctx.settings.get('trafiklab_api_key')
-        if (!apiKey) return safeJson(200, { trips: [], error: 'not_configured' })
+        const fc = (fromCountry || '').toUpperCase()
+        const tc = (toCountry || '').toUpperCase()
+        // Domestic-only fallback for each provider — neither covers cross-border
+        // journeys, so both ends must match the same country.
+        const provider = fc === tc ? Object.values(HAFAS_PROVIDERS).find(p => p.countryCode === fc) : null
+        if (!provider) return safeJson(200, { trips: [] })
 
-        // ResRobot only covers Sweden's own network — a domestic-only fallback,
-        // not a cross-border one.
-        if ((fromCountry || '').toUpperCase() !== 'SE' || (toCountry || '').toUpperCase() !== 'SE') {
-          return safeJson(200, { trips: [] })
-        }
+        const apiKey = await ctx.settings.get(provider.settingsKey)
+        if (!apiKey) return safeJson(200, { trips: [], error: 'not_configured' })
 
         try {
           const [origin, dest] = await Promise.all([
-            resRobotLocationSearch(fromName, apiKey, ctx),
-            resRobotLocationSearch(toName, apiKey, ctx),
+            hafasLocationSearch(provider.baseUrl, fromName, apiKey, ctx),
+            hafasLocationSearch(provider.baseUrl, toName, apiKey, ctx),
           ])
           if (!origin || !dest) {
             return safeJson(200, { trips: [], error: `stop lookup failed (${!origin ? `origin "${fromName}"` : `destination "${toName}"`} had no match)` })
           }
 
-          const trips = await resRobotTrip(origin.extId || origin.id, dest.extId || dest.id, date, time, apiKey)
-          return safeJson(200, { trips: trips.map(normalizeResRobotTrip), source: 'trafiklab' })
+          const trips = await hafasTrip(provider.baseUrl, origin.extId || origin.id, dest.extId || dest.id, date, time, apiKey)
+          return safeJson(200, { trips: trips.map((t, i) => normalizeHafasTrip(t, i, provider)), source: provider.source })
         } catch (e) {
           return safeJson(200, { trips: [], error: e.message })
         }

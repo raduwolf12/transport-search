@@ -1033,8 +1033,9 @@ async function doSearch(){
       .then(function(pd){if(pd.passes&&pd.passes.length)renderPasses(pd.passes);})
       .catch(function(){});
 
-    // Supplemental Swedish domestic transit (Trafiklab/ResRobot) — no-ops
-    // unless both ends are in Sweden and an API key is configured.
+    // Supplemental Nordic domestic transit (Trafiklab for SE, Rejseplanen for
+    // DK) — no-ops unless both ends are in the same supported country and its
+    // API key is configured.
     fetchTransitSupplement(fromPlace,toPlace,date,allTrips);
     if(date2)fetchTransitSupplement(toPlace,fromPlace,date2,returnTrips);
 
@@ -1045,9 +1046,15 @@ async function doSearch(){
   }
 }
 
+// Countries with a wired supplemental provider (Sweden->Trafiklab, Denmark->
+// Rejseplanen) — kept in sync with server's HAFAS_PROVIDERS. This is just an
+// early-exit to skip a pointless request; the server is the real gate.
+var TRANSIT_SUPPLEMENT_COUNTRIES=['SE','DK'];
+var SUPPLEMENT_SOURCE_LABEL={trafiklab:'Trafiklab.se',rejseplanen:'Rejseplanen.dk'};
 function fetchTransitSupplement(fromP,toP,d,targetArr){
   if(!fromP||!toP)return;
-  if((fromP.countryCode||'').toUpperCase()!=='SE'||(toP.countryCode||'').toUpperCase()!=='SE')return;
+  var fc=(fromP.countryCode||'').toUpperCase(),tc=(toP.countryCode||'').toUpperCase();
+  if(fc!==tc||TRANSIT_SUPPLEMENT_COUNTRIES.indexOf(fc)===-1)return;
   var qs='/transit-search?fromName='+encodeURIComponent(fromP.nameFull||fromP.name)+
     '&toName='+encodeURIComponent(toP.nameFull||toP.name)+
     '&fromCountry='+encodeURIComponent(fromP.countryCode||'')+
@@ -1132,11 +1139,12 @@ function renderResults(){
 
   trips.forEach(function(t,idx){renderTripCard(t,idx,list);});
 
-  // CC-BY attribution, required whenever a Trafiklab-sourced result is shown.
-  if(allTrips.concat(returnTrips).some(function(t){return t.source==='trafiklab';})){
+  // CC-BY attribution, required whenever a supplemental-source result is shown.
+  var supSources=allTrips.concat(returnTrips).map(function(t){return SUPPLEMENT_SOURCE_LABEL[t.source];}).filter(Boolean);
+  if(supSources.length){
     var attr=document.createElement('div');
     attr.style.cssText='font-size:10.5px;color:var(--text-faint);text-align:right;padding:6px 2px 0;';
-    attr.textContent='Public transit data from Trafiklab.se';
+    attr.textContent='Public transit data from '+supSources.filter(function(v,i,a){return a.indexOf(v)===i;}).join(', ');
     list.appendChild(attr);
   }
 
@@ -1182,11 +1190,12 @@ function renderTripCard(t,idx,list){
       return '<span class="feat-tag '+(f.variant||'info')+'">'+escHtml(f.text)+'</span>';
     }).join('');
 
-    var isTrafiklab=t.source==='trafiklab';
+    var supLabel=SUPPLEMENT_SOURCE_LABEL[t.source];
+    var isSupplemental=!!supLabel;
     card.innerHTML=
       '<div class="trip-card-top">'+
         '<span class="trip-mode-badge mode-'+t.mode+'">'+t.mode+'</span>'+
-        (isTrafiklab?'<span class="trek-chip trek-chip--info" style="margin-left:4px;font-size:10px;padding:2px 8px;">Trafiklab.se</span>':'')+
+        (isSupplemental?'<span class="trek-chip trek-chip--info" style="margin-left:4px;font-size:10px;padding:2px 8px;">'+escHtml(supLabel)+'</span>':'')+
         '<div class="trip-main">'+
           '<div class="trip-times">'+
             '<span class="trip-dep">'+depT+'</span>'+
@@ -1196,15 +1205,15 @@ function renderTripCard(t,idx,list){
           '<div class="trip-stops">'+stopText+' · '+escHtml(t.from?.name||'')+'→'+escHtml(t.to?.name||'')+'</div>'+
           '<div class="trip-operator">'+
             (firstLogo?'<img class="op-logo" src="'+escHtml(firstLogo)+'" onerror="this.style.visibility=&apos;hidden&apos;"/>':'')+
-            '<span>'+escHtml(opNames||(isTrafiklab?'Public transit':''))+'</span>'+
+            '<span>'+escHtml(opNames||(isSupplemental?'Public transit':''))+'</span>'+
             (t.class?'<span style="color:var(--text-faint)">· '+escHtml(t.class)+'</span>':'')+
           '</div>'+
           (featHtml?'<div class="trip-features">'+featHtml+'</div>':'')+
         '</div>'+
         '<div class="trip-right">'+
           '<div>'+
-            '<div class="trip-price">'+(t.price.display||(isTrafiklab?'':'—'))+'</div>'+
-            (isTrafiklab?'<div class="trip-price-sub">no fare data</div>':'<div class="trip-price-sub">per person</div>')+
+            '<div class="trip-price">'+(t.price.display||(isSupplemental?'':'—'))+'</div>'+
+            (isSupplemental?'<div class="trip-price-sub">no fare data</div>':'<div class="trip-price-sub">per person</div>')+
           '</div>'+
           (t.seats&&t.seats<=5?'<div style="font-size:10.5px;color:var(--danger);font-weight:600;">'+t.seats+' seats left</div>':'') +
           '<button class="btn-book" data-idx="'+idx+'" onclick="handleBook(this)">'+(t.isBookable?'Book':'Save')+'</button>'+
@@ -1297,9 +1306,9 @@ function showBookOptions(btn, trip){
 
   pop.appendChild(saveBtn);
 
-  // Trafiklab/ResRobot results have no traveling.com booking link — only offer it
-  // when the trip actually came from (and is bookable via) traveling.com.
-  if(trip.isBookable&&trip.source!=='trafiklab'){
+  // Supplemental-source results have no traveling.com booking link — only offer
+  // it when the trip actually came from (and is bookable via) traveling.com.
+  if(trip.isBookable&&!SUPPLEMENT_SOURCE_LABEL[trip.source]){
     var bookBtn=document.createElement('button');
     bookBtn.style.cssText='display:flex;align-items:center;gap:8px;width:100%;padding:9px 12px;border:none;background:none;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;color:var(--text-primary);border-radius:var(--radius-sm);text-align:left;';
     bookBtn.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 0 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" x2="21" y1="14" y2="3"/></svg>Open on Traveling.com';

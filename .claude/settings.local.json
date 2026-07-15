@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --check server/index.js)",
+      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('trek-plugin.json','utf8'\\)\\);console.log\\('manifest valid'\\)\")"
+    ]
+  }
+}
