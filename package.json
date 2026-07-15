@@ -1,0 +1,7 @@
+{
+  "name": "transport-search",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "devDependencies": { "trek-plugin-sdk": "^1.0.0" }
+}

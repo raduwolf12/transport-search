@@ -1,0 +1,34 @@
+{
+  "id": "transport-search",
+  "name": "Transport Search",
+  "version": "1.1.0",
+  "apiVersion": 1,
+  "type": "trip-page",
+  "trek": ">=3.3.0 <4.0.0",
+  "author": "self-hosted",
+  "description": "Search buses, trains, flights and transfers between any two places via Traveling.com. Browse results, filter by transport type, and open booking links.",
+  "icon": "Search",
+  "license": "MIT",
+  "nativeModules": false,
+  "permissions": [
+    "db:read:trips",
+    "http:outbound:traveling.com",
+    "http:outbound:recheck10.12go.com",
+    "http:outbound:recheck11.12go.com",
+    "http:outbound:api.resrobot.se",
+    "db:write:reservations",
+    "rates:read"
+  ],
+  "egress": [
+    "traveling.com",
+    "recheck10.12go.com",
+    "recheck11.12go.com",
+    "api.resrobot.se"
+  ],
+  "operatorEgress": true,
+  "settings": [
+    { "key": "trafiklab_api_key", "label": "Trafiklab (ResRobot) API key",
+      "input_type": "password", "scope": "user", "required": false,
+      "secret": true, "hint": "Free key from developer.trafiklab.se — enables supplemental Swedish domestic transit search (all modes, not just trains) when Traveling.com has thin/no coverage. Leave blank to disable." }
+  ]
+}

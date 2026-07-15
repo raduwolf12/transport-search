@@ -1,0 +1,1366 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Transport Search</title>
+  <!-- trek:ui -->
+  <style>/* TREK plugin design kit — token-driven, matches the host in light + dark. */
+:root {
+  color-scheme: light;
+  /* Live tokens (the host overrides these per theme/accent via the bridge). */
+  --bg-primary: #ffffff; --bg-secondary: #f8fafc; --bg-tertiary: #f1f5f9;
+  --bg-card: #ffffff; --bg-input: #ffffff; --bg-hover: rgba(0,0,0,.03); --bg-selected: #e2e8f0;
+  --text-primary: #111827; --text-secondary: #374151; --text-muted: #6b7280; --text-faint: #9ca3af;
+  --border-primary: #e5e7eb; --border-secondary: #f3f4f6; --border-faint: rgba(0,0,0,.06);
+  --accent: #111827; --accent-text: #ffffff; --accent-hover: #1f2937; --accent-subtle: #f1f5f9;
+  --success: #16a34a; --success-soft: #dcfce7; --danger: #dc2626; --danger-soft: #fef2f2;
+  --warning: #d97706; --warning-soft: #fffbeb; --info: #2563eb; --info-soft: #eff6ff;
+  --shadow-card: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.05); --shadow-md: 0 4px 12px rgba(0,0,0,.08);
+  --shadow-lg: 0 12px 32px rgba(0,0,0,.12);
+  --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px; --radius-xl: 20px;
+  --font-system: 'Poppins', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+  /* Baked glass layer (mirrors the host's .trek-dash; not sent over the bridge). */
+  --glass-bg: linear-gradient(135deg, oklch(1 0 0 / .72) 0%, oklch(0.99 0.006 75 / .5) 100%);
+  --glass-border: oklch(0.88 0.008 70 / .7);
+  --glass-shadow: 0 1px 2px oklch(0.4 0.02 60 / .05), 0 12px 32px -14px oklch(0.3 0.02 60 / .2);
+  --glass-shadow-hover: 0 2px 6px oklch(0.4 0.02 60 / .07), 0 26px 56px -20px oklch(0.25 0.04 60 / .32);
+  --glass-highlight: inset 0 1px 0 oklch(1 0 0 / .8);
+  --glass-blur: blur(22px) saturate(1.7);
+  --r-sm: 14px; --r-md: 18px; --r-lg: 22px; --r-xl: 28px;
+  /* The house easings: a punchy card curve and TREK's ease-out-quint. */
+  --trek-ease: cubic-bezier(.2,.7,.2,1);
+  --trek-ease-quint: cubic-bezier(.23,1,.32,1);
+}
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-primary: #121215; --bg-secondary: #1a1a1e; --bg-tertiary: #1c1c21;
+  --bg-card: #131316; --bg-input: #1c1c21; --bg-hover: rgba(255,255,255,.06); --bg-selected: rgba(255,255,255,.1);
+  --text-primary: #f4f4f5; --text-secondary: #d4d4d8; --text-muted: #a1a1aa; --text-faint: #71717a;
+  --border-primary: #27272a; --border-secondary: #1c1c21; --border-faint: rgba(255,255,255,.07);
+  --accent: #e4e4e7; --accent-text: #09090b; --accent-hover: #d4d4d8; --accent-subtle: rgba(255,255,255,.08);
+  --success: #22c55e; --success-soft: rgba(34,197,94,.15); --danger: #ef4444; --danger-soft: rgba(239,68,68,.15);
+  --warning: #f59e0b; --warning-soft: rgba(245,158,11,.15); --info: #3b82f6; --info-soft: rgba(59,130,246,.15);
+  --shadow-card: 0 1px 3px rgba(0,0,0,.4), 0 1px 2px rgba(0,0,0,.3);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.3); --shadow-md: 0 4px 12px rgba(0,0,0,.4);
+  --shadow-lg: 0 12px 32px rgba(0,0,0,.5);
+  --glass-bg: linear-gradient(135deg, oklch(0.31 0 0 / .58) 0%, oklch(0.25 0 0 / .42) 100%);
+  --glass-border: oklch(1 0 0 / .1);
+  --glass-shadow: 0 1px 2px oklch(0 0 0 / .3), 0 12px 32px -14px oklch(0 0 0 / .55);
+  --glass-shadow-hover: 0 2px 6px oklch(0 0 0 / .4), 0 26px 56px -20px oklch(0 0 0 / .72);
+  --glass-highlight: inset 0 1px 0 oklch(1 0 0 / .09);
+}
+
+/* Base: a light reset + native type. The bootstrap adds `trek-ui` to <body>. */
+*, *::before, *::after { box-sizing: border-box; }
+body.trek-ui {
+  margin: 0;
+  font-family: var(--font-system);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background: transparent;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+.trek-ui :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+/* Cards + panels ----------------------------------------------------------- */
+.trek-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 16px;
+}
+.trek-glass {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--glass-shadow), var(--glass-highlight);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  padding: 24px 26px;
+}
+/* Add to a card/glass to make it lift on hover, like a native tool tile. */
+.trek-interactive {
+  transition: transform .3s var(--trek-ease), box-shadow .3s, border-color .3s;
+  cursor: pointer;
+}
+.trek-glass.trek-interactive:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--glass-shadow-hover), var(--glass-highlight);
+}
+.trek-card.trek-interactive:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+.trek-interactive:active { transform: translateY(0); }
+
+/* Buttons ------------------------------------------------------------------ */
+.trek-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 10px 16px; border-radius: 12px;
+  font: inherit; font-size: 14px; font-weight: 500; line-height: 1;
+  border: 1px solid transparent; cursor: pointer; text-decoration: none; white-space: nowrap;
+  transition: transform .08s var(--trek-ease-quint), background .15s, box-shadow .15s, border-color .15s, color .15s;
+}
+.trek-btn:active { transform: scale(.97); }
+.trek-btn:disabled { opacity: .5; cursor: not-allowed; }
+.trek-btn--primary { background: var(--accent); color: var(--accent-text); box-shadow: var(--shadow-sm); }
+.trek-btn--primary:hover:not(:disabled) { background: var(--accent-hover); }
+.trek-btn--secondary { background: var(--bg-card); color: var(--text-primary); border-color: var(--border-primary); box-shadow: var(--shadow-sm); }
+.trek-btn--secondary:hover:not(:disabled) { background: var(--bg-hover); }
+.trek-btn--ghost { background: transparent; color: var(--text-secondary); }
+.trek-btn--ghost:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.trek-btn--danger { background: var(--danger); color: #fff; }
+.trek-btn--danger:hover:not(:disabled) { filter: brightness(1.05); }
+
+/* Form controls ------------------------------------------------------------ */
+.trek-input, .trek-textarea, .trek-select {
+  width: 100%; box-sizing: border-box;
+  padding: 8px 14px; border-radius: 10px;
+  border: 1px solid var(--border-primary); background: var(--bg-input); color: var(--text-primary);
+  font: inherit; font-size: 13px; outline: none;
+  transition: border-color .15s, box-shadow .15s, background .15s;
+}
+.trek-textarea { resize: vertical; min-height: 72px; }
+.trek-input::placeholder, .trek-textarea::placeholder { color: var(--text-faint); }
+.trek-input:focus, .trek-textarea:focus, .trek-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 22%, transparent);
+}
+.trek-label { display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; }
+
+/* Enhanced select — the kit upgrades a native <select> into this listbox so the
+   dropdown matches the host (a native popup is drawn by the OS and can't be
+   themed). The real <select> stays in the DOM as the value source. */
+.trek-select-wrap { position: relative; }
+.trek-select-native-hidden {
+  position: absolute !important; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); border: 0;
+}
+.trek-select-trigger {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  text-align: start; cursor: pointer;
+}
+.trek-select-trigger:disabled { opacity: .5; cursor: not-allowed; }
+.trek-select-trigger[aria-expanded="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 22%, transparent);
+}
+.trek-select-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trek-select-caret { flex: none; display: inline-flex; color: var(--text-faint); transition: transform .15s; }
+.trek-select-trigger[aria-expanded="true"] .trek-select-caret { transform: rotate(180deg); }
+.trek-select-menu {
+  position: absolute; left: 0; right: 0; top: 100%; z-index: 50;
+  margin-top: 6px; padding: 4px;
+  max-height: 260px; overflow-y: auto;
+  background: var(--bg-card); color: var(--text-primary);
+  border: 1px solid var(--border-primary); border-radius: 10px;
+  box-shadow: var(--shadow-md);
+}
+.trek-select-menu[data-placement="top"] { top: auto; bottom: 100%; margin-top: 0; margin-bottom: 6px; }
+.trek-select-option {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border-radius: 7px; cursor: pointer;
+  font-size: 13px; white-space: nowrap;
+}
+.trek-select-option.trek-active { background: var(--bg-hover); }
+.trek-select-option[aria-selected="true"] { color: var(--accent); font-weight: 600; }
+.trek-select-option[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
+
+/* Chips + badges ----------------------------------------------------------- */
+.trek-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; white-space: nowrap;
+  color: var(--text-secondary); background: var(--accent-subtle);
+}
+.trek-chip--accent  { color: var(--accent);  background: color-mix(in oklch, var(--accent) 12%, transparent); }
+.trek-chip--success { color: var(--success); background: var(--success-soft); }
+.trek-chip--danger  { color: var(--danger);  background: var(--danger-soft); }
+.trek-chip--warning { color: var(--warning); background: var(--warning-soft); }
+.trek-chip--info    { color: var(--info);    background: var(--info-soft); }
+
+/* Rows + text helpers ------------------------------------------------------ */
+.trek-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px; border-radius: 12px; cursor: pointer;
+  transition: background .12s;
+}
+.trek-row:hover { background: var(--bg-hover); }
+.trek-title { font-size: 13px; font-weight: 500; text-transform: uppercase; letter-spacing: .14em; color: var(--text-muted); }
+.trek-muted { color: var(--text-muted); }
+.trek-faint { color: var(--text-faint); }
+
+/* Layout helpers ----------------------------------------------------------- */
+.trek-stack { display: flex; flex-direction: column; gap: 12px; }
+.trek-cluster { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+
+/* Motion library — the host's animation vocabulary, mirrored 1:1 from
+   index.css so plugin UI moves exactly like TREK does. ---------------------- */
+@keyframes trek-menu-enter {
+  from { opacity: 0; transform: scale(0.95) translateY(-4px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes trek-popover-enter {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes trek-modal-enter {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes trek-backdrop-enter {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes trek-toast-enter {
+  from { opacity: 0; transform: translateY(8px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes trek-progress-fill {
+  from { width: 0%; }
+  to   { width: var(--trek-progress-to, 0%); }
+}
+@keyframes trek-pie-reveal {
+  from { opacity: 0; transform: rotate(-90deg) scale(0.85); }
+  to   { opacity: 1; transform: rotate(0deg) scale(1); }
+}
+@keyframes trek-bar-fill {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+@keyframes trek-page-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes trek-shimmer {
+  from { background-position: -200% 0; }
+  to   { background-position: 200% 0; }
+}
+@keyframes trek-drawer-enter {
+  from { opacity: 0; transform: translateY(100%); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes trek-fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.trek-menu-enter {
+  animation: trek-menu-enter 200ms var(--trek-ease-quint);
+  transform-origin: top right; will-change: transform, opacity;
+}
+.trek-menu-enter-left {
+  animation: trek-menu-enter 200ms var(--trek-ease-quint);
+  transform-origin: top left; will-change: transform, opacity;
+}
+.trek-popover-enter { animation: trek-popover-enter 180ms var(--trek-ease-quint); will-change: transform, opacity; }
+.trek-modal-enter { animation: trek-modal-enter 220ms var(--trek-ease-quint); will-change: transform, opacity; }
+@media (max-width: 639px) {
+  .trek-modal-enter { animation: trek-drawer-enter 320ms cubic-bezier(0.32, 0.72, 0, 1); }
+}
+.trek-backdrop-enter { animation: trek-backdrop-enter 180ms var(--trek-ease-quint); }
+.trek-toast-enter { animation: trek-toast-enter 260ms var(--trek-ease-quint); will-change: transform, opacity; }
+.trek-pie-reveal {
+  animation: trek-pie-reveal 900ms var(--trek-ease-quint) both;
+  transform-origin: center; will-change: transform, opacity;
+}
+.trek-bar-fill {
+  animation: trek-bar-fill 700ms var(--trek-ease-quint) both;
+  transform-origin: left center; will-change: transform;
+}
+.trek-page-enter { animation: trek-page-enter 220ms var(--trek-ease-quint) both; }
+.trek-skeleton {
+  background: linear-gradient(90deg, var(--bg-tertiary) 0%, var(--bg-hover) 50%, var(--bg-tertiary) 100%);
+  background-size: 200% 100%;
+  animation: trek-shimmer 1.6s linear infinite;
+  border-radius: 8px; color: transparent; user-select: none;
+}
+[data-theme="dark"] .trek-skeleton {
+  background: linear-gradient(90deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0.04) 100%);
+  background-size: 200% 100%;
+}
+.trek-stagger > * { animation: trek-fade-up 280ms var(--trek-ease-quint) both; }
+.trek-stagger > *:nth-child(1) { animation-delay: 0ms; }
+.trek-stagger > *:nth-child(2) { animation-delay: 40ms; }
+.trek-stagger > *:nth-child(3) { animation-delay: 80ms; }
+.trek-stagger > *:nth-child(4) { animation-delay: 120ms; }
+.trek-stagger > *:nth-child(5) { animation-delay: 160ms; }
+.trek-stagger > *:nth-child(6) { animation-delay: 200ms; }
+.trek-stagger > *:nth-child(7) { animation-delay: 240ms; }
+.trek-stagger > *:nth-child(8) { animation-delay: 280ms; }
+.trek-stagger > *:nth-child(n+9) { animation-delay: 320ms; }
+
+/* Accessibility: mirror the host's own graceful-degrade rules. -------------- */
+[data-no-transparency] .trek-glass {
+  background: var(--bg-card); border-color: var(--border-primary);
+  box-shadow: var(--shadow-card);
+  -webkit-backdrop-filter: none; backdrop-filter: none;
+}
+[data-reduce-motion] .trek-interactive,
+[data-reduce-motion] .trek-btn,
+[data-reduce-motion] .trek-row { transition: none; }
+[data-reduce-motion] .trek-interactive:hover,
+[data-reduce-motion] .trek-btn:active { transform: none; }
+[data-reduce-motion] .trek-menu-enter, [data-reduce-motion] .trek-menu-enter-left,
+[data-reduce-motion] .trek-popover-enter, [data-reduce-motion] .trek-modal-enter,
+[data-reduce-motion] .trek-toast-enter, [data-reduce-motion] .trek-stagger > *,
+[data-reduce-motion] .trek-page-enter {
+  animation: trek-backdrop-enter 120ms ease-out;
+}
+[data-reduce-motion] .trek-pie-reveal, [data-reduce-motion] .trek-bar-fill {
+  animation: trek-backdrop-enter 120ms ease-out both;
+}
+[data-reduce-motion] .trek-skeleton { animation: none; background: var(--bg-tertiary); }
+[data-reduce-motion] .trek-select-caret { transition: none; }
+@media (prefers-reduced-motion: reduce) {
+  .trek-interactive, .trek-btn, .trek-row, .trek-input, .trek-textarea, .trek-select, .trek-select-caret { transition: none; }
+  .trek-interactive:hover, .trek-btn:active { transform: none; }
+  .trek-menu-enter, .trek-menu-enter-left, .trek-popover-enter,
+  .trek-modal-enter, .trek-toast-enter, .trek-stagger > *, .trek-page-enter {
+    animation: trek-backdrop-enter 120ms ease-out;
+  }
+  .trek-pie-reveal, .trek-bar-fill { animation: trek-backdrop-enter 120ms ease-out both; }
+  .trek-skeleton { animation: none; background: var(--bg-tertiary); }
+}</style>
+  <script>(function () {
+  'use strict';
+  var docEl = document.documentElement;
+  var ctxHandlers = [];
+  var evtHandlers = [];
+  var lastCtx = null;
+  var pending = {};
+  var pendingConfirms = {};
+  var seq = 0;
+  var lastH = -1;
+
+  function send(msg) { try { window.parent.postMessage(msg, '*'); } catch (e) {} }
+  function setFlag(name, on) { if (on) { docEl.setAttribute(name, ''); } else { docEl.removeAttribute(name); } }
+
+  function applyContext(m) {
+    if (m.theme) { docEl.setAttribute('data-theme', m.theme); }
+    if (m.locale) { docEl.setAttribute('lang', m.locale); }
+    docEl.setAttribute('dir', m.dir === 'rtl' ? 'rtl' : 'ltr');
+    var t = m.tokens || {};
+    for (var k in t) {
+      if (Object.prototype.hasOwnProperty.call(t, k) && t[k]) { docEl.style.setProperty(k, t[k]); }
+    }
+    var a = m.appearance || {};
+    setFlag('data-reduce-motion', a.reducedMotion);
+    setFlag('data-no-transparency', a.noTransparency);
+    if (a.density) { docEl.setAttribute('data-density', a.density); }
+    if (a.scheme) { docEl.setAttribute('data-scheme', a.scheme); }
+    if (document.body) { document.body.classList.add('trek-ui'); }
+  }
+
+  function reportHeight() {
+    var h = Math.ceil(document.documentElement.scrollHeight);
+    if (h > 0 && h !== lastH) { lastH = h; send({ type: 'trek:resize', height: h }); }
+  }
+
+  window.addEventListener('message', function (ev) {
+    // Opaque frame: origin serialises to 'null', so trust the SENDER — only our real
+    // parent window. Never act on a claimed id or on origin.
+    if (ev.source !== window.parent) { return; }
+    var m = ev.data;
+    if (!m || typeof m !== 'object') { return; }
+    if (m.type === 'trek:context') {
+      lastCtx = m; api.context = m;
+      applyContext(m);
+      for (var i = 0; i < ctxHandlers.length; i++) { try { ctxHandlers[i](m); } catch (e) {} }
+      reportHeight();
+    } else if (m.type === 'trek:response') {
+      var p = pending[m.requestId];
+      if (p) { delete pending[m.requestId]; p.resolve(m.data); }
+    } else if (m.type === 'trek:error') {
+      var q = pending[m.requestId];
+      if (q) { delete pending[m.requestId]; var err = new Error(m.message || 'invoke failed'); err.code = m.code; q.reject(err); }
+    } else if (m.type === 'trek:confirm:result') {
+      var c = pendingConfirms[m.requestId];
+      if (c) { delete pendingConfirms[m.requestId]; c(!!m.confirmed); }
+    } else if (m.type === 'trek:event') {
+      for (var j = 0; j < evtHandlers.length; j++) { try { evtHandlers[j](m.event, m.tripId); } catch (e) {} }
+    }
+  });
+
+  // Native DOM helpers so a widget can build kit-styled UI with no bundler and no
+  // hand-written CSS — every element carries the same trek-* classes the kit ships.
+  function mkEl(tag, props, children) {
+    var node = document.createElement(tag);
+    props = props || {};
+    for (var k in props) {
+      if (!Object.prototype.hasOwnProperty.call(props, k)) { continue; }
+      var v = props[k];
+      if (v == null) { continue; }
+      if (k === 'class' || k === 'className') { node.className = v; }
+      else if (k === 'text') { node.textContent = v; }
+      else if (k === 'html') { node.innerHTML = v; }
+      else if (k === 'on') { for (var ev in v) { if (Object.prototype.hasOwnProperty.call(v, ev)) { node.addEventListener(ev, v[ev]); } } }
+      else { node.setAttribute(k, v); }
+    }
+    var kids = children == null ? [] : (typeof children === 'string' || children.nodeType ? [children] : children);
+    for (var i = 0; i < kids.length; i++) {
+      var c = kids[i];
+      if (c == null) { continue; }
+      node.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+    }
+    return node;
+  }
+  var ui = {
+    el: mkEl,
+    button: function (label, opts) {
+      opts = opts || {};
+      return mkEl('button', { class: 'trek-btn' + (opts.variant ? ' trek-btn--' + opts.variant : ''), type: 'button', text: label, on: opts.onClick ? { click: opts.onClick } : null }, null);
+    },
+    card: function (children) { return mkEl('div', { class: 'trek-card' }, children); },
+    chip: function (text, variant) { return mkEl('span', { class: 'trek-chip' + (variant ? ' trek-chip--' + variant : ''), text: text }, null); },
+    input: function (opts) { opts = opts || {}; return mkEl('input', { class: 'trek-input', type: opts.type || 'text', placeholder: opts.placeholder || '', value: opts.value || '' }, null); },
+    mount: function (node, target) { (target || document.body).appendChild(node); return node; }
+  };
+
+  var api = {
+    context: null,
+    ui: ui,
+    ready: function () { send({ type: 'trek:ready' }); },
+    requestContext: function () { send({ type: 'trek:context:request' }); },
+    onContext: function (cb) {
+      ctxHandlers.push(cb);
+      if (lastCtx) { try { cb(lastCtx); } catch (e) {} }
+      return function () { var i = ctxHandlers.indexOf(cb); if (i >= 0) { ctxHandlers.splice(i, 1); } };
+    },
+    notify: function (level, message, duration) { send({ type: 'trek:notify', level: level, message: message, duration: duration }); },
+    navigate: function (to) { send({ type: 'trek:navigate', to: to }); },
+    openExternal: function (url) { send({ type: 'trek:openExternal', url: url }); },
+    resize: function (px) { var h = px | 0; if (h > 0) { lastH = h; send({ type: 'trek:resize', height: h }); } },
+    // Host-rendered native confirm dialog; resolves true/false. The host shows one
+    // at a time — a second concurrent request resolves false immediately.
+    confirm: function (opts) {
+      opts = typeof opts === 'string' ? { message: opts } : (opts || {});
+      var id = 'c' + (++seq);
+      return new Promise(function (resolve) {
+        pendingConfirms[id] = resolve;
+        send({ type: 'trek:confirm', requestId: id, title: opts.title, message: opts.message, confirmLabel: opts.confirmLabel, cancelLabel: opts.cancelLabel, danger: opts.danger });
+      });
+    },
+    // Core-event names for the trip in view ({ event, tripId } only, no payloads) —
+    // refetch via invoke() when something relevant fires instead of polling.
+    onEvent: function (cb) {
+      evtHandlers.push(cb);
+      return function () { var i = evtHandlers.indexOf(cb); if (i >= 0) { evtHandlers.splice(i, 1); } };
+    },
+    invoke: function (sub, opts) {
+      opts = opts || {};
+      var id = 'r' + (++seq);
+      return new Promise(function (resolve, reject) {
+        pending[id] = { resolve: resolve, reject: reject };
+        send({ type: 'trek:invoke', requestId: id, sub: sub, method: opts.method, body: opts.body });
+      });
+    }
+  };
+  window.trek = api;
+
+  // --- Native <select> -> host-styled listbox ---------------------------------
+  // A native select's popup is drawn by the OS and can't match TREK. Upgrade each
+  // one to a keyboard-accessible listbox that uses the kit tokens, while the real
+  // <select> stays in the DOM as the value/form source (kept in sync both ways).
+  // Opt out per field with data-trek-native; multi/size selects are left alone.
+  function dispatch(el, type) {
+    var ev;
+    try { ev = new Event(type, { bubbles: true }); }
+    catch (e) { ev = document.createEvent('Event'); ev.initEvent(type, true, false); }
+    el.dispatchEvent(ev);
+  }
+  function enhanceSelect(sel) {
+    if (!sel || sel.__trekSelect || sel.hasAttribute('data-trek-native')) { return; }
+    if (sel.multiple || sel.size > 1 || !sel.parentNode) { return; }
+    sel.__trekSelect = true;
+
+    var wrap = document.createElement('div');
+    wrap.className = 'trek-select-wrap';
+    sel.parentNode.insertBefore(wrap, sel);
+    wrap.appendChild(sel);
+    sel.classList.add('trek-select-native-hidden');
+    sel.setAttribute('tabindex', '-1');
+    sel.setAttribute('aria-hidden', 'true');
+
+    var trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'trek-select trek-select-trigger';
+    trigger.setAttribute('aria-haspopup', 'listbox');
+    trigger.setAttribute('aria-expanded', 'false');
+    if (sel.disabled) { trigger.disabled = true; }
+    var valueEl = document.createElement('span');
+    valueEl.className = 'trek-select-value';
+    var caret = document.createElement('span');
+    caret.className = 'trek-select-caret';
+    caret.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+    trigger.appendChild(valueEl);
+    trigger.appendChild(caret);
+    wrap.appendChild(trigger);
+
+    var menu = document.createElement('div');
+    menu.className = 'trek-select-menu';
+    menu.setAttribute('role', 'listbox');
+    menu.hidden = true;
+    wrap.appendChild(menu);
+
+    var activeIdx = -1;
+
+    function syncTrigger() {
+      var o = sel.options[sel.selectedIndex];
+      valueEl.textContent = o ? o.text : '';
+    }
+    function buildMenu() {
+      menu.innerHTML = '';
+      for (var i = 0; i < sel.options.length; i++) {
+        var o = sel.options[i];
+        var item = document.createElement('div');
+        item.className = 'trek-select-option';
+        item.setAttribute('role', 'option');
+        item.setAttribute('data-idx', String(i));
+        item.setAttribute('aria-selected', i === sel.selectedIndex ? 'true' : 'false');
+        if (o.disabled) { item.setAttribute('aria-disabled', 'true'); }
+        item.textContent = o.text;
+        menu.appendChild(item);
+      }
+    }
+    function highlight(idx) {
+      var opts = menu.children;
+      for (var i = 0; i < opts.length; i++) {
+        opts[i].className = i === idx ? 'trek-select-option trek-active' : 'trek-select-option';
+      }
+      if (idx >= 0 && opts[idx] && opts[idx].scrollIntoView) { opts[idx].scrollIntoView({ block: 'nearest' }); }
+      activeIdx = idx;
+    }
+    function onDocDown(e) { if (!wrap.contains(e.target)) { closeMenu(); } }
+    function openMenu() {
+      if (trigger.disabled || !menu.hidden) { return; }
+      buildMenu();
+      menu.hidden = false;
+      trigger.setAttribute('aria-expanded', 'true');
+      // Flip above the trigger when there isn't room below in the frame viewport.
+      var r = trigger.getBoundingClientRect();
+      var below = window.innerHeight - r.bottom;
+      if (below < Math.min(260, menu.scrollHeight + 12) && r.top > below) { menu.setAttribute('data-placement', 'top'); }
+      else { menu.removeAttribute('data-placement'); }
+      highlight(sel.selectedIndex);
+      reportHeight();
+      document.addEventListener('mousedown', onDocDown, true);
+    }
+    function closeMenu() {
+      if (menu.hidden) { return; }
+      menu.hidden = true;
+      trigger.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('mousedown', onDocDown, true);
+      reportHeight();
+    }
+    function nextEnabled(from, dir) {
+      var i = from;
+      for (var n = 0; n < sel.options.length; n++) {
+        i += dir;
+        if (i < 0) { i = sel.options.length - 1; }
+        if (i >= sel.options.length) { i = 0; }
+        if (!sel.options[i].disabled) { return i; }
+      }
+      return from;
+    }
+    function commit(idx) {
+      if (idx < 0 || idx >= sel.options.length || sel.options[idx].disabled) { return; }
+      if (sel.selectedIndex !== idx) { sel.selectedIndex = idx; dispatch(sel, 'input'); dispatch(sel, 'change'); }
+      syncTrigger();
+      closeMenu();
+      trigger.focus();
+    }
+
+    trigger.addEventListener('click', function () { if (menu.hidden) { openMenu(); } else { closeMenu(); } });
+    trigger.addEventListener('keydown', function (e) {
+      var k = e.key;
+      if (menu.hidden) {
+        if (k === 'ArrowDown' || k === 'ArrowUp' || k === 'Enter' || k === ' ' || k === 'Spacebar') { e.preventDefault(); openMenu(); }
+        return;
+      }
+      if (k === 'Escape') { e.preventDefault(); closeMenu(); trigger.focus(); }
+      else if (k === 'ArrowDown') { e.preventDefault(); highlight(nextEnabled(activeIdx, 1)); }
+      else if (k === 'ArrowUp') { e.preventDefault(); highlight(nextEnabled(activeIdx, -1)); }
+      else if (k === 'Home') { e.preventDefault(); highlight(nextEnabled(-1, 1)); }
+      else if (k === 'End') { e.preventDefault(); highlight(nextEnabled(0, -1)); }
+      else if (k === 'Enter' || k === ' ' || k === 'Spacebar') { e.preventDefault(); commit(activeIdx); }
+      else if (k === 'Tab') { closeMenu(); }
+    });
+    menu.addEventListener('mousedown', function (e) { e.preventDefault(); }); // keep focus on the trigger
+    menu.addEventListener('click', function (e) {
+      var t = e.target;
+      while (t && t !== menu && !(t.getAttribute && t.hasAttribute('data-idx'))) { t = t.parentNode; }
+      if (t && t.getAttribute && t.hasAttribute('data-idx')) { commit(parseInt(t.getAttribute('data-idx'), 10)); }
+    });
+    menu.addEventListener('mousemove', function (e) {
+      var t = e.target;
+      while (t && t !== menu && !(t.getAttribute && t.hasAttribute('data-idx'))) { t = t.parentNode; }
+      if (t && t.getAttribute && t.hasAttribute('data-idx')) { highlight(parseInt(t.getAttribute('data-idx'), 10)); }
+    });
+    // The plugin may set select.value itself — mirror it back to the trigger.
+    sel.addEventListener('change', syncTrigger);
+    syncTrigger();
+  }
+  function enhanceAllSelects(root) {
+    var live = (root || document).getElementsByTagName('select');
+    var arr = [];
+    for (var i = 0; i < live.length; i++) { arr.push(live[i]); }
+    for (var j = 0; j < arr.length; j++) { enhanceSelect(arr[j]); }
+  }
+
+  function boot() {
+    if (document.body) { document.body.classList.add('trek-ui'); }
+    enhanceAllSelects(document);
+    if (typeof MutationObserver !== 'undefined' && document.body) {
+      new MutationObserver(function (muts) {
+        for (var i = 0; i < muts.length; i++) {
+          var added = muts[i].addedNodes;
+          for (var j = 0; j < added.length; j++) {
+            var n = added[j];
+            if (!n || n.nodeType !== 1) { continue; }
+            if (n.tagName === 'SELECT') { enhanceSelect(n); }
+            else if (n.getElementsByTagName) { enhanceAllSelects(n); }
+          }
+        }
+      }).observe(document.body, { childList: true, subtree: true });
+    }
+    api.ready();
+    reportHeight();
+    if (typeof ResizeObserver !== 'undefined' && document.body) {
+      new ResizeObserver(reportHeight).observe(document.body);
+    }
+  }
+  if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', boot); } else { boot(); }
+})();</script>
+  <style>
+    *{box-sizing:border-box;}
+    body{margin:0;padding:0;}
+    .page{padding:20px 24px 28px;}
+
+    /* Search bar */
+    .search-bar{display:grid;grid-template-columns:1fr 1fr auto auto auto;gap:8px;align-items:end;margin-bottom:16px;}
+    @media(max-width:800px){.search-bar{grid-template-columns:1fr 1fr;}}
+    .search-bar.oneway{grid-template-columns:1fr 1fr auto auto auto;}
+    .search-bar.return-trip{grid-template-columns:1fr 1fr auto auto auto auto;}
+    .place-wrap{position:relative;}
+    .place-wrap label{display:block;font-size:11px;font-weight:600;color:var(--text-faint);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;}
+    .place-input{width:100%;background:var(--bg-input);border:1px solid var(--border-primary);border-radius:var(--radius-sm);padding:8px 10px;color:var(--text-primary);font-size:13px;outline:none;font-family:inherit;transition:border-color .12s;}
+    .place-input:focus{border-color:var(--accent);}
+    .place-dd{display:none;position:absolute;top:100%;left:0;right:0;background:var(--bg-card);border:1px solid var(--border-primary);border-radius:var(--radius-sm);margin-top:3px;z-index:50;box-shadow:var(--shadow-lg);max-height:260px;overflow-y:auto;}
+    .place-dd.open{display:block;}
+    .place-opt{padding:9px 12px;cursor:pointer;font-size:13px;color:var(--text-primary);border-bottom:1px solid var(--border-secondary);}
+    .place-opt:last-child{border-bottom:none;}
+    .place-opt:hover{background:var(--bg-hover);}
+    .place-opt-name{font-weight:600;}
+    .place-opt-sub{font-size:11px;color:var(--text-faint);margin-top:1px;}
+    .place-opt.selected{background:var(--accent-subtle);}
+    .date-wrap label{display:block;font-size:11px;font-weight:600;color:var(--text-faint);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;}
+    input[type=date]{background:var(--bg-input);border:1px solid var(--border-primary);border-radius:var(--radius-sm);padding:8px 10px;color:var(--text-primary);font-size:13px;outline:none;font-family:inherit;width:100%;transition:border-color .12s;}
+    input[type=date]:focus{border-color:var(--accent);}
+    .pax-wrap{display:flex;flex-direction:column;gap:4px;}
+    .pax-wrap label{font-size:11px;font-weight:600;color:var(--text-faint);text-transform:uppercase;letter-spacing:.04em;}
+    .pax-row{display:flex;align-items:center;gap:6px;}
+    .pax-btn{width:28px;height:28px;border-radius:50%;border:1px solid var(--border-primary);background:var(--bg-secondary);color:var(--text-primary);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-family:inherit;transition:background .12s;}
+    .pax-btn:hover{background:var(--bg-hover);}
+    .pax-val{font-size:14px;font-weight:700;color:var(--text-primary);min-width:16px;text-align:center;}
+    .search-btn{background:var(--accent);border:none;border-radius:var(--radius-sm);padding:0 20px;height:38px;color:var(--accent-text);font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;transition:background .12s;align-self:end;}
+    .search-btn:hover:not(:disabled){background:var(--accent-hover);}
+    .search-btn:disabled{opacity:.5;cursor:default;}
+
+    /* Swap button */
+    .swap-btn{background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;cursor:pointer;align-self:end;margin-bottom:4px;flex-shrink:0;transition:background .12s;}
+    .swap-btn:hover{background:var(--bg-hover);}
+
+    /* Filters */
+    .filter-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;align-items:center;}
+    .filter-chip{border:1.5px solid var(--border-primary);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;background:var(--bg-card);color:var(--text-muted);font-family:inherit;transition:all .12s;}
+    .filter-chip:hover{border-color:var(--accent);color:var(--accent);}
+    .filter-chip.active{background:var(--accent);border-color:var(--accent);color:var(--accent-text);}
+    .results-count{font-size:12px;color:var(--text-faint);margin-left:auto;}
+
+    /* Sort */
+    .sort-row{display:flex;gap:6px;align-items:center;margin-bottom:14px;}
+    .sort-label{font-size:12px;color:var(--text-faint);}
+    .sort-btn{border:1px solid var(--border-primary);border-radius:6px;padding:3px 10px;font-size:12px;font-weight:600;cursor:pointer;background:var(--bg-card);color:var(--text-muted);font-family:inherit;}
+    .sort-btn.active{background:var(--text-primary);color:var(--bg-primary);border-color:var(--text-primary);}
+
+    /* Result cards */
+    .results-list{display:flex;flex-direction:column;gap:10px;}
+    .trip-card{border:1px solid var(--border-primary);border-radius:var(--radius-lg);padding:14px 16px;background:var(--bg-card);box-shadow:var(--shadow-card);transition:border-color .12s;}
+    .trip-card:hover{border-color:var(--accent);}
+    .trip-card-top{display:flex;gap:12px;align-items:flex-start;}
+    .trip-mode-badge{font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;flex-shrink:0;white-space:nowrap;margin-top:2px;}
+    .mode-Flight{background:var(--info-soft);color:var(--info);}
+    .mode-Bus{background:var(--success-soft);color:var(--success);}
+    .mode-Train{background:color-mix(in oklch,#8b5cf6 12%,transparent);color:#5b21b6;}
+    .mode-Transfer{background:var(--warning-soft);color:var(--warning);}
+    .mode-Ferry{background:var(--info-soft);color:var(--info);}
+    .trip-main{flex:1;min-width:0;}
+    .trip-times{display:flex;align-items:center;gap:8px;margin-bottom:4px;}
+    .trip-dep,.trip-arr{font-size:17px;font-weight:800;color:var(--text-primary);}
+    .trip-arrow{color:var(--text-faint);font-size:13px;flex:1;text-align:center;position:relative;}
+    .trip-arrow-line{border-top:1px dashed var(--border-primary);position:absolute;top:50%;left:0;right:0;}
+    .trip-arrow-dur{background:var(--bg-card);padding:0 4px;font-size:11px;color:var(--text-faint);position:relative;z-index:1;}
+    .trip-stops{font-size:11px;color:var(--text-muted);margin-bottom:5px;}
+    .trip-stops .layover{color:var(--warning);font-weight:600;}
+    .trip-operator{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted);}
+    .op-logo{width:20px;height:20px;object-fit:contain;border-radius:3px;background:var(--bg-tertiary);}
+    .trip-right{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;}
+    .trip-price{font-size:19px;font-weight:800;color:var(--text-primary);}
+    .trip-price-sub{font-size:10.5px;color:var(--text-faint);}
+    .trip-class{font-size:11px;color:var(--text-faint);}
+    .btn-book{background:var(--accent);border:none;border-radius:var(--radius-sm);padding:7px 14px;color:var(--accent-text);font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;transition:background .12s;}
+    .btn-book:hover{background:var(--accent-hover);}
+    .trip-features{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px;}
+    .feat-tag{font-size:10px;font-weight:600;padding:2px 7px;border-radius:4px;}
+    .feat-tag.success-darker{background:var(--success-soft);color:var(--success);}
+    .feat-tag.attention-lighter{background:var(--warning-soft);color:var(--warning);}
+    .feat-tag.info{background:var(--info-soft);color:var(--info);}
+    .feat-tag.danger{background:var(--danger-soft);color:var(--danger);}
+
+    /* Segments expand */
+    .trip-segments{margin-top:10px;border-top:1px solid var(--border-secondary);padding-top:10px;display:none;}
+    .trip-segments.open{display:block;}
+    .seg-row{display:flex;gap:8px;align-items:flex-start;padding:4px 0;}
+    .seg-time{font-size:12px;font-weight:700;color:var(--text-primary);min-width:48px;}
+    .seg-info{font-size:12px;color:var(--text-muted);}
+    .seg-flight{font-size:11px;font-weight:700;color:var(--accent);}
+    .wait-row{padding:3px 0 3px 56px;font-size:11px;color:var(--warning);}
+    .expand-btn{background:none;border:none;color:var(--text-faint);font-size:11.5px;cursor:pointer;padding:6px 0 0;font-family:inherit;}
+
+    /* Rail passes */
+    .passes-section{margin-top:20px;border-top:1px solid var(--border-primary);padding-top:16px;}
+    .passes-title{font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;display:flex;align-items:center;gap:6px;}
+    .passes-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;}
+    .pass-card{border:1px solid var(--border-primary);border-radius:var(--radius-md);padding:14px 16px;background:var(--bg-card);box-shadow:var(--shadow-card);}
+    .pass-name{font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:4px;}
+    .pass-desc{font-size:12px;color:var(--text-muted);margin-bottom:8px;line-height:1.4;}
+    .pass-classes{display:flex;flex-direction:column;gap:5px;}
+    .pass-class-row{display:flex;justify-content:space-between;align-items:center;font-size:12px;}
+    .pass-class-name{color:var(--text-secondary);}
+    .pass-class-price{font-weight:700;color:var(--text-primary);}
+
+    /* Status */
+    .status{color:var(--text-muted);font-size:13px;padding:20px 0;text-align:center;}
+    .status.error{color:var(--danger);}
+    .loading-bar{height:3px;background:linear-gradient(90deg,var(--accent) 0%,var(--bg-tertiary) 100%);border-radius:3px;animation:trek-shimmer 1.5s infinite;background-size:200% 100%;margin-bottom:14px;}
+    .recheck-note{font-size:12px;color:var(--text-faint);background:var(--info-soft);border-radius:var(--radius-sm);padding:6px 10px;margin-bottom:10px;display:none;}
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Trip type toggle -->
+  <div style="display:flex;gap:0;margin-bottom:10px;width:fit-content;border:1px solid var(--border-primary);border-radius:var(--radius-sm);overflow:hidden;">
+    <button class="trip-type-btn active" id="btn-oneway" onclick="setTripType('oneway')" style="padding:5px 14px;font-size:12px;font-weight:600;border:none;cursor:pointer;font-family:inherit;background:var(--text-primary);color:var(--bg-primary);transition:all .12s;">One way</button>
+    <button class="trip-type-btn" id="btn-return" onclick="setTripType('return')" style="padding:5px 14px;font-size:12px;font-weight:600;border:none;cursor:pointer;font-family:inherit;background:var(--bg-secondary);color:var(--text-muted);transition:all .12s;">Return</button>
+  </div>
+
+  <!-- Search bar -->
+  <div class="search-bar">
+    <div class="place-wrap" id="from-wrap">
+      <label>From</label>
+      <input class="place-input" id="from-input" placeholder="City or airport…" autocomplete="off"/>
+      <div class="place-dd" id="from-dd"></div>
+      <input type="hidden" id="from-id"/>
+      <input type="hidden" id="from-slug"/>
+      <input type="hidden" id="from-country-slug"/>
+    </div>
+    <div style="display:flex;gap:6px;align-items:flex-end;">
+      <div class="place-wrap" style="flex:1;" id="to-wrap">
+        <label>To</label>
+        <input class="place-input" id="to-input" placeholder="City or airport…" autocomplete="off"/>
+        <div class="place-dd" id="to-dd"></div>
+        <input type="hidden" id="to-id"/>
+        <input type="hidden" id="to-slug"/>
+        <input type="hidden" id="to-country-slug"/>
+      </div>
+      <button class="swap-btn" onclick="swapPlaces()" title="Swap">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/></svg>
+      </button>
+    </div>
+    <div class="date-wrap">
+      <label>Depart</label>
+      <input type="date" id="date-input"/>
+    </div>
+    <div class="date-wrap" id="return-date-wrap" style="display:none;">
+      <label>Return</label>
+      <input type="date" id="date2-input"/>
+    </div>
+    <div style="display:flex;gap:8px;align-items:flex-end;">
+      <div class="pax-wrap">
+        <label>People</label>
+        <div class="pax-row">
+          <button class="pax-btn" onclick="setPax(-1)">−</button>
+          <span class="pax-val" id="pax-val">1</span>
+          <button class="pax-btn" onclick="setPax(1)">+</button>
+        </div>
+      </div>
+      <button class="search-btn" id="search-btn" onclick="doSearch()">
+        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-2px;margin-right:5px;"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>Search
+      </button>
+    </div>
+  </div>
+
+  <!-- Loading -->
+  <div class="loading-bar" id="loading-bar" style="display:none;"></div>
+  <div class="recheck-note" id="recheck-note">
+    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-1px;margin-right:4px;"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+    Loading more results…
+  </div>
+
+  <!-- Filters + sort -->
+  <div id="filter-row" style="display:none;">
+    <div class="filter-row">
+      <button class="filter-chip active" data-mode="all" onclick="setFilter(this)">All</button>
+      <button class="filter-chip" data-mode="Flight" onclick="setFilter(this)">✈ Flights</button>
+      <button class="filter-chip" data-mode="Bus" onclick="setFilter(this)">🚌 Buses</button>
+      <button class="filter-chip" data-mode="Train" onclick="setFilter(this)">🚂 Trains</button>
+      <button class="filter-chip" data-mode="Transfer" onclick="setFilter(this)">🚗 Transfers</button>
+      <span class="results-count" id="results-count"></span>
+    </div>
+    <div class="sort-row">
+      <span class="sort-label">Sort by</span>
+      <button class="sort-btn active" data-sort="price" onclick="setSort(this)">Price</button>
+      <button class="sort-btn" data-sort="duration" onclick="setSort(this)">Duration</button>
+      <button class="sort-btn" data-sort="dep" onclick="setSort(this)">Departure</button>
+    </div>
+  </div>
+
+  <!-- Status / results -->
+  <div id="status" class="status">Enter origin and destination to search.</div>
+  <div class="results-list" id="results-list"></div>
+
+  <!-- Rail passes -->
+  <div class="passes-section" id="passes-section" style="display:none;">
+    <div class="passes-title">
+      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><line x1="9" x2="9" y1="2" y2="22"/><line x1="15" x2="15" y1="2" y2="22"/></svg>
+      Rail passes available for this route
+    </div>
+    <div class="passes-grid" id="passes-grid"></div>
+  </div>
+</div>
+
+<script>
+var pax=1;
+var tripType='oneway'; // 'oneway' | 'return'
+var allTrips=[];
+var returnTrips=[];
+var currentFilter='all';
+var currentSort='price';
+var fromPlace=null,toPlace=null;
+var recheckUrls=[];
+var recheckTimer=null;
+
+function setTripType(type){
+  tripType=type;
+  document.getElementById('btn-oneway').style.background=type==='oneway'?'var(--text-primary)':'var(--bg-secondary)';
+  document.getElementById('btn-oneway').style.color=type==='oneway'?'var(--bg-primary)':'var(--text-muted)';
+  document.getElementById('btn-return').style.background=type==='return'?'var(--text-primary)':'var(--bg-secondary)';
+  document.getElementById('btn-return').style.color=type==='return'?'var(--bg-primary)':'var(--text-muted)';
+  document.getElementById('return-date-wrap').style.display=type==='return'?'block':'none';
+  // Set return date default to +7 days from depart
+  if(type==='return'&&!document.getElementById('date2-input').value){
+    var d=new Date(document.getElementById('date-input').value||Date.now());
+    d.setDate(d.getDate()+7);
+    document.getElementById('date2-input').value=d.toISOString().slice(0,10);
+  }
+  rh();
+}
+
+// ── RPC ──────────────────────────────────────────────────────────────────────
+var pending={},seq=0;
+function invoke(path,method,body){
+  return new Promise(function(res,rej){
+    var id='r'+(++seq);pending[id]={resolve:res,reject:rej};
+    window.parent.postMessage({type:'trek:invoke',requestId:id,sub:path,method:method||'GET',body:body},'*');
+  });
+}
+window.addEventListener('message',function(e){
+  if(e.source!==window.parent)return;
+  var m=e.data;if(!m||typeof m!=='object')return;
+  if(m.type==='trek:context')onContext(m);
+  else if(m.type==='trek:response'){var p=pending[m.requestId];if(p){delete pending[m.requestId];p.resolve(m.data);}}
+  else if(m.type==='trek:error'){var p2=pending[m.requestId];if(p2){delete pending[m.requestId];p2.reject(new Error(m.message));}}
+});
+
+// ── Context ──────────────────────────────────────────────────────────────────
+var currentTripId=null;
+
+function onContext(ctx){
+  currentTripId = ctx.tripId || null;
+  // Set today's date as default
+  var today=new Date();
+  document.getElementById('date-input').value=today.toISOString().slice(0,10);
+  rh();
+}
+
+// ── Place autocomplete ────────────────────────────────────────────────────────
+var placeTimers={};
+function initPlaceInput(prefix){
+  var input=document.getElementById(prefix+'-input');
+  var dd=document.getElementById(prefix+'-dd');
+  var idField=document.getElementById(prefix+'-id');
+  var slugField=document.getElementById(prefix+'-slug');
+  var countrySlugField=document.getElementById(prefix+'-country-slug');
+
+  input.addEventListener('input',function(){
+    var q=this.value;
+    if(placeTimers[prefix])clearTimeout(placeTimers[prefix]);
+    if(q.length<2){dd.classList.remove('open');return;}
+    placeTimers[prefix]=setTimeout(async function(){
+      try{
+        var data=await invoke('/places?q='+encodeURIComponent(q),'GET');
+        if(data.error){console.warn('[transport-search] places error:',data.error);}
+        var places=data.places||[];
+        // Sort: city entries (id ends in 'p') first
+        places.sort(function(a,b){
+          var ap=String(a.id).endsWith('p')?0:1;
+          var bp=String(b.id).endsWith('p')?0:1;
+          return ap-bp;
+        });
+        dd.innerHTML='';
+        if(!places.length){dd.classList.remove('open');return;}
+        places.forEach(function(p){
+          var typeLabel=p.type?({bus:'Bus',train:'Train',avia:'Flight',charter:'Transfer',van:'Van',ferry:'Ferry'}[p.type]||p.type):'City';
+          var isCity=String(p.id).endsWith('p');
+          var opt=document.createElement('div');opt.className='place-opt';
+          opt.innerHTML='<div class="place-opt-name">'+(isCity?'<strong>':'')+escHtml(p.nameFull||p.name)+(isCity?'</strong>':'')+
+            ' <span style="font-size:10px;color:var(--text-faint);font-weight:600;background:var(--bg-tertiary);border-radius:3px;padding:1px 5px;margin-left:4px;">'+escHtml(typeLabel)+'</span></div>'+
+            '<div class="place-opt-sub">'+escHtml(p.country||p.countryCode||'')+'</div>';
+          opt.addEventListener('click',function(){
+            input.value=p.nameFull||p.name;
+            idField.value=p.id;
+            slugField.value=p.slug||'';
+            countrySlugField.value=p.countrySlug||'';
+            if(prefix==='from')fromPlace=p;else toPlace=p;
+            dd.classList.remove('open');
+          });
+          dd.appendChild(opt);
+        });
+        dd.classList.add('open');
+      }catch(_e){}
+    },300);
+  });
+  document.addEventListener('click',function(e){if(!e.target.closest('#'+prefix+'-wrap')&&!e.target.closest('#'+prefix+'-dd'))dd.classList.remove('open');});
+}
+initPlaceInput('from');
+initPlaceInput('to');
+
+// ── Pax ──────────────────────────────────────────────────────────────────────
+function setPax(d){pax=Math.max(1,Math.min(9,pax+d));document.getElementById('pax-val').textContent=pax;}
+
+// ── Swap ─────────────────────────────────────────────────────────────────────
+function swapPlaces(){
+  var fv=document.getElementById('from-input').value;
+  var tv=document.getElementById('to-input').value;
+  document.getElementById('from-input').value=tv;
+  document.getElementById('to-input').value=fv;
+  var fi=document.getElementById('from-id').value;
+  var ti=document.getElementById('to-id').value;
+  document.getElementById('from-id').value=ti;
+  document.getElementById('to-id').value=fi;
+  var fs=document.getElementById('from-slug').value;
+  var ts=document.getElementById('to-slug').value;
+  document.getElementById('from-slug').value=ts;
+  document.getElementById('to-slug').value=fs;
+  var fcs=document.getElementById('from-country-slug').value;
+  var tcs=document.getElementById('to-country-slug').value;
+  document.getElementById('from-country-slug').value=tcs;
+  document.getElementById('to-country-slug').value=fcs;
+  var tmp=fromPlace;fromPlace=toPlace;toPlace=tmp;
+}
+
+// ── Search ────────────────────────────────────────────────────────────────────
+async function doSearch(){
+  var fromId=document.getElementById('from-id').value;
+  var toId=document.getElementById('to-id').value;
+  var date=document.getElementById('date-input').value;
+  var date2=tripType==='return'?document.getElementById('date2-input').value:null;
+  if(!fromId||!toId){setStatus('Please select both origin and destination from the dropdown.');return;}
+  if(!date){setStatus('Please select a departure date.');return;}
+  if(tripType==='return'&&!date2){setStatus('Please select a return date.');return;}
+
+  // Clear previous
+  allTrips=[];returnTrips=[];recheckUrls=[];
+  if(recheckTimer)clearInterval(recheckTimer);
+  document.getElementById('results-list').innerHTML='';
+  document.getElementById('filter-row').style.display='none';
+  document.getElementById('passes-section').style.display='none';
+  document.getElementById('loading-bar').style.display='block';
+  document.getElementById('recheck-note').style.display='none';
+  document.getElementById('search-btn').disabled=true;
+  setStatus('Searching…');
+
+  var fromSlug=document.getElementById('from-slug').value;
+  var toSlug=document.getElementById('to-slug').value;
+  var fromCountrySlug=document.getElementById('from-country-slug').value;
+  var toCountrySlug=document.getElementById('to-country-slug').value;
+
+  function buildQs(fId,tId,fSlug,tSlug,fCS,tCS,d){
+    return '/search?fromId='+encodeURIComponent(fId)+'&toId='+encodeURIComponent(tId)+
+      '&fromSlug='+encodeURIComponent(fSlug)+'&toSlug='+encodeURIComponent(tSlug)+
+      '&fromCountrySlug='+encodeURIComponent(fCS)+'&toCountrySlug='+encodeURIComponent(tCS)+
+      '&date='+encodeURIComponent(d)+'&people='+pax+'&adults='+pax;
+  }
+
+  try{
+    // Fire outbound and (if return) inbound searches in parallel
+    var outboundPromise=invoke(buildQs(fromId,toId,fromSlug,toSlug,fromCountrySlug,toCountrySlug,date),'GET');
+    var inboundPromise=date2?invoke(buildQs(toId,fromId,toSlug,fromSlug,toCountrySlug,fromCountrySlug,date2),'GET'):Promise.resolve(null);
+
+    var [outData,inData]=await Promise.all([outboundPromise,inboundPromise]);
+
+    if(outData.error){setStatus('Error: '+outData.error,true);document.getElementById('loading-bar').style.display='none';document.getElementById('search-btn').disabled=false;return;}
+
+    allTrips=outData.trips||[];
+    recheckUrls=outData.recheckUrls||[];
+    if(inData&&!inData.error)returnTrips=inData.trips||[];
+
+    if(recheckUrls.length){
+      document.getElementById('recheck-note').style.display='block';
+      recheckTimer=setTimeout(function(){pollRecheck(recheckUrls);},2000);
+    } else {
+      document.getElementById('loading-bar').style.display='none';
+    }
+
+    renderResults();
+    document.getElementById('search-btn').disabled=false;
+
+    // Rail passes concurrently
+    invoke('/passes?fromId='+encodeURIComponent(fromId)+'&toId='+encodeURIComponent(toId),'GET')
+      .then(function(pd){if(pd.passes&&pd.passes.length)renderPasses(pd.passes);})
+      .catch(function(){});
+
+    // Supplemental Swedish domestic transit (Trafiklab/ResRobot) — no-ops
+    // unless both ends are in Sweden and an API key is configured.
+    fetchTransitSupplement(fromPlace,toPlace,date,allTrips);
+    if(date2)fetchTransitSupplement(toPlace,fromPlace,date2,returnTrips);
+
+  }catch(e){
+    setStatus('Search failed: '+e.message,true);
+    document.getElementById('loading-bar').style.display='none';
+    document.getElementById('search-btn').disabled=false;
+  }
+}
+
+function fetchTransitSupplement(fromP,toP,d,targetArr){
+  if(!fromP||!toP)return;
+  if((fromP.countryCode||'').toUpperCase()!=='SE'||(toP.countryCode||'').toUpperCase()!=='SE')return;
+  var qs='/transit-search?fromName='+encodeURIComponent(fromP.nameFull||fromP.name)+
+    '&toName='+encodeURIComponent(toP.nameFull||toP.name)+
+    '&fromCountry='+encodeURIComponent(fromP.countryCode||'')+
+    '&toCountry='+encodeURIComponent(toP.countryCode||'')+
+    '&date='+encodeURIComponent(d);
+  invoke(qs,'GET').then(function(data){
+    if(data&&data.trips&&data.trips.length){
+      data.trips.forEach(function(t){targetArr.push(t);});
+      // Only re-render if this is still the array backing the current view —
+      // a newer search may have already replaced it.
+      if(targetArr===allTrips||targetArr===returnTrips)renderResults();
+    }
+  }).catch(function(){});
+}
+
+async function pollRecheck(urls){
+  try{
+    var data=await invoke('/recheck','POST',{urls:urls});
+    var newTrips=data.trips||[];
+    if(newTrips.length){
+      newTrips.forEach(function(t){
+        if(!allTrips.find(function(x){return x.id===t.id;}))allTrips.push(t);
+      });
+      renderResults();
+    }
+  }catch(_e){}
+  document.getElementById('loading-bar').style.display='none';
+  document.getElementById('recheck-note').style.display='none';
+  rh();
+}
+
+// ── Filters & sort ────────────────────────────────────────────────────────────
+function setFilter(btn){
+  document.querySelectorAll('.filter-chip').forEach(function(b){b.classList.remove('active');});
+  btn.classList.add('active');
+  currentFilter=btn.dataset.mode;
+  renderResults();
+}
+function setSort(btn){
+  document.querySelectorAll('.sort-btn').forEach(function(b){b.classList.remove('active');});
+  btn.classList.add('active');
+  currentSort=btn.dataset.sort;
+  renderResults();
+}
+
+function getFiltered(){
+  var trips=allTrips.slice();
+  if(currentFilter!=='all')trips=trips.filter(function(t){return t.mode===currentFilter;});
+  trips.sort(function(a,b){
+    if(currentSort==='price')return (a.price.value||9999)-(b.price.value||9999);
+    if(currentSort==='duration')return (a.durationMin||9999)-(b.durationMin||9999);
+    if(currentSort==='dep')return (a.depTime||'').localeCompare(b.depTime||'');
+    return 0;
+  });
+  return trips;
+}
+
+// ── Render ─────────────────────────────────────────────────────────────────────
+function renderResults(){
+  var trips=getFiltered();
+  var list=document.getElementById('results-list');
+  list.innerHTML='';
+
+  if(allTrips.length){
+    document.getElementById('filter-row').style.display='block';
+  }
+  document.getElementById('results-count').textContent=trips.length+' result'+(trips.length===1?'':'s')+(returnTrips.length?' · '+returnTrips.length+' return':'');
+
+  if(!trips.length){
+    setStatus(allTrips.length?'No results match the current filter.':'No results found for this route and date.');
+    rh();return;
+  }
+  document.getElementById('status').style.display='none';
+
+  // Outbound section header (only if return trip mode)
+  if(tripType==='return'&&returnTrips.length){
+    var hdr=document.createElement('div');
+    hdr.style.cssText='font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-faint);padding:4px 0 8px;';
+    hdr.textContent='Outbound — '+document.getElementById('date-input').value;
+    list.appendChild(hdr);
+  }
+
+  trips.forEach(function(t,idx){renderTripCard(t,idx,list);});
+
+  // CC-BY attribution, required whenever a Trafiklab-sourced result is shown.
+  if(allTrips.concat(returnTrips).some(function(t){return t.source==='trafiklab';})){
+    var attr=document.createElement('div');
+    attr.style.cssText='font-size:10.5px;color:var(--text-faint);text-align:right;padding:6px 2px 0;';
+    attr.textContent='Public transit data from Trafiklab.se';
+    list.appendChild(attr);
+  }
+
+  // Return section
+  if(tripType==='return'&&returnTrips.length){
+    var retFiltered=returnTrips.slice();
+    if(currentFilter!=='all')retFiltered=retFiltered.filter(function(t){return t.mode===currentFilter;});
+    retFiltered.sort(function(a,b){
+      if(currentSort==='price')return (a.price.value||9999)-(b.price.value||9999);
+      if(currentSort==='duration')return (a.durationMin||9999)-(b.durationMin||9999);
+      return (a.depTime||'').localeCompare(b.depTime||'');
+    });
+
+    var hdr2=document.createElement('div');
+    hdr2.style.cssText='font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-faint);padding:20px 0 8px;';
+    hdr2.textContent='Return — '+document.getElementById('date2-input').value;
+    list.appendChild(hdr2);
+
+    retFiltered.forEach(function(t,idx){renderTripCard(t,idx+1000,list);});
+  }
+  rh();
+}
+
+function renderTripCard(t,idx,list){
+    var card=document.createElement('div');card.className='trip-card';
+    var depT=fmtTime(t.depTime);
+    var arrT=fmtTime(t.arrTime);
+    var dur=fmtDur(t.durationMin);
+    var opNames=(t.operators||[]).map(function(o){return o.name;}).join(' + ');
+    var firstLogo=(t.operators||[])[0]?.logo;
+
+    // Layover summary
+    var stopText='';
+    if(t.isMultiSegment){
+      var layTimes=t.layovers.map(function(l){return fmtDur(l.durationMin);}).join(', ');
+      stopText='<span class="layover">'+t.segments.length+'  stop'+(t.segments.length===1?'':'s')+(layTimes?' · '+layTimes:'')+'</span>';
+    } else {
+      stopText='Direct';
+    }
+
+    // Features
+    var featHtml=(t.features||[]).filter(function(f){return f.key!=='nonrefundable';}).slice(0,3).map(function(f){
+      return '<span class="feat-tag '+(f.variant||'info')+'">'+escHtml(f.text)+'</span>';
+    }).join('');
+
+    var isTrafiklab=t.source==='trafiklab';
+    card.innerHTML=
+      '<div class="trip-card-top">'+
+        '<span class="trip-mode-badge mode-'+t.mode+'">'+t.mode+'</span>'+
+        (isTrafiklab?'<span class="trek-chip trek-chip--info" style="margin-left:4px;font-size:10px;padding:2px 8px;">Trafiklab.se</span>':'')+
+        '<div class="trip-main">'+
+          '<div class="trip-times">'+
+            '<span class="trip-dep">'+depT+'</span>'+
+            '<div class="trip-arrow"><div class="trip-arrow-line"></div><span class="trip-arrow-dur">'+dur+'</span></div>'+
+            '<span class="trip-arr">'+arrT+'</span>'+
+          '</div>'+
+          '<div class="trip-stops">'+stopText+' · '+escHtml(t.from?.name||'')+'→'+escHtml(t.to?.name||'')+'</div>'+
+          '<div class="trip-operator">'+
+            (firstLogo?'<img class="op-logo" src="'+escHtml(firstLogo)+'" onerror="this.style.visibility=&apos;hidden&apos;"/>':'')+
+            '<span>'+escHtml(opNames||(isTrafiklab?'Public transit':''))+'</span>'+
+            (t.class?'<span style="color:var(--text-faint)">· '+escHtml(t.class)+'</span>':'')+
+          '</div>'+
+          (featHtml?'<div class="trip-features">'+featHtml+'</div>':'')+
+        '</div>'+
+        '<div class="trip-right">'+
+          '<div>'+
+            '<div class="trip-price">'+(t.price.display||(isTrafiklab?'':'—'))+'</div>'+
+            (isTrafiklab?'<div class="trip-price-sub">no fare data</div>':'<div class="trip-price-sub">per person</div>')+
+          '</div>'+
+          (t.seats&&t.seats<=5?'<div style="font-size:10.5px;color:var(--danger);font-weight:600;">'+t.seats+' seats left</div>':'') +
+          '<button class="btn-book" data-idx="'+idx+'" onclick="handleBook(this)">'+(t.isBookable?'Book':'Save')+'</button>'+
+        '</div>'+
+      '</div>';
+
+    // Expandable segments for multi-stop
+    if(t.isMultiSegment){
+      var btn=document.createElement('button');btn.className='expand-btn';
+      btn.textContent='▶ Show '+t.segments.length+' segments';
+      var segDiv=document.createElement('div');segDiv.className='trip-segments';
+      var segHtml='';
+      t.segments.forEach(function(s,idx){
+        segHtml+='<div class="seg-row">'+
+          '<div class="seg-time">'+fmtTime(s.depTime)+'</div>'+
+          '<div><div class="seg-info">'+escHtml(s.from?.nameFull||s.from?.name||'')+'</div>'+
+          (s.flightNo?'<div class="seg-flight">'+escHtml(s.operator||'')+'  '+escHtml(s.flightNo)+'</div>':'')+
+          '<div class="seg-info" style="font-size:11px;color:var(--text-faint);">'+fmtDur(s.durationMin)+'  →  '+fmtTime(s.arrTime)+'  '+escHtml(s.to?.nameFull||s.to?.name||'')+'</div></div>'+
+          '</div>';
+        if(idx<t.layovers.length){
+          segHtml+='<div class="wait-row">⏱ Layover '+escHtml(t.layovers[idx]?.description||fmtDur(t.layovers[idx]?.durationMin||0))+'</div>';
+        }
+      });
+      segDiv.innerHTML=segHtml;
+      btn.addEventListener('click',function(){
+        var open=segDiv.classList.toggle('open');
+        btn.textContent=(open?'▼ Hide':'▶ Show')+' '+t.segments.length+' segments';
+        rh();
+      });
+      card.appendChild(btn);
+      card.appendChild(segDiv);
+    }
+
+    list.appendChild(card);
+}
+
+function renderPasses(passes){
+  var section=document.getElementById('passes-section');
+  var grid=document.getElementById('passes-grid');
+  grid.innerHTML='';
+  passes.forEach(function(p){
+    var card=document.createElement('div');card.className='pass-card';
+    var classRows=(p.classes||[]).slice(0,2).map(function(c){
+      var pr=c.minPrice?c.minPrice.fxcode+' '+Math.round(c.minPrice.value):'—';
+      return '<div class="pass-class-row"><span class="pass-class-name">'+escHtml(c.name)+'</span><span class="pass-class-price">from '+escHtml(pr)+'</span></div>';
+    }).join('');
+    var validity=(p.validity||[]).map(function(v){return v+(v===1?' day':' days');}).join(' / ');
+    card.innerHTML=
+      '<div class="pass-name">'+escHtml(p.name)+'</div>'+
+      '<div class="pass-desc">'+escHtml(p.description||'')+'</div>'+
+      (validity?'<div style="font-size:11px;color:var(--text-faint);margin-bottom:6px;">Validity: '+escHtml(validity)+'</div>':'')+
+      '<div class="pass-classes">'+classRows+'</div>';
+    grid.appendChild(card);
+  });
+  section.style.display='block';
+  rh();
+}
+
+
+function handleBook(btn){
+  var idx=parseInt(btn.dataset.idx);
+  var trip=getFiltered()[idx];
+  if(!trip)return;
+  // Show two options: save to transports or open booking URL
+  showBookOptions(btn, trip);
+}
+
+function showBookOptions(btn, trip){
+  // Remove any existing popover
+  var existing=document.getElementById('book-popover');
+  if(existing)existing.remove();
+
+  var pop=document.createElement('div');
+  pop.id='book-popover';
+  pop.style.cssText='position:fixed;z-index:200;background:var(--bg-card);border:1px solid var(--border-primary);border-radius:var(--radius-md);box-shadow:var(--shadow-lg);padding:8px;min-width:220px;';
+
+  var r=btn.getBoundingClientRect();
+  pop.style.top=(r.bottom+6)+'px';
+  pop.style.right=(window.innerWidth-r.right)+'px';
+
+  var saveBtn=document.createElement('button');
+  saveBtn.style.cssText='display:flex;align-items:center;gap:8px;width:100%;padding:9px 12px;border:none;background:none;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;color:var(--text-primary);border-radius:var(--radius-sm);text-align:left;';
+  saveBtn.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Save to Transports';
+  saveBtn.onmouseenter=function(){this.style.background='var(--bg-hover)';};
+  saveBtn.onmouseleave=function(){this.style.background='none';};
+  saveBtn.addEventListener('click',function(){
+    pop.remove();
+    saveTransport(btn, trip);
+  });
+
+  pop.appendChild(saveBtn);
+
+  // Trafiklab/ResRobot results have no traveling.com booking link — only offer it
+  // when the trip actually came from (and is bookable via) traveling.com.
+  if(trip.isBookable&&trip.source!=='trafiklab'){
+    var bookBtn=document.createElement('button');
+    bookBtn.style.cssText='display:flex;align-items:center;gap:8px;width:100%;padding:9px 12px;border:none;background:none;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;color:var(--text-primary);border-radius:var(--radius-sm);text-align:left;';
+    bookBtn.innerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 0 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" x2="21" y1="14" y2="3"/></svg>Open on Traveling.com';
+    bookBtn.onmouseenter=function(){this.style.background='var(--bg-hover)';};
+    bookBtn.onmouseleave=function(){this.style.background='none';};
+    bookBtn.addEventListener('click',function(){
+      pop.remove();
+      openBookingUrl(trip);
+    });
+    pop.appendChild(document.createElement('hr')).style.cssText='margin:4px 0;border:none;border-top:1px solid var(--border-primary);';
+    pop.appendChild(bookBtn);
+  }
+  document.body.appendChild(pop);
+  setTimeout(function(){document.addEventListener('click',function close(e){if(!pop.contains(e.target)){pop.remove();document.removeEventListener('click',close);}});},0);
+}
+
+async function saveTransport(btn, trip){
+  if(!currentTripId){setStatus('No trip context — open this plugin from inside a trip.',true);return;}
+  var origText=btn.closest('.trip-card')?.querySelector('.btn-book')?.textContent||'Book';
+  var bookBtn=btn.closest && btn.closest('.trip-card')?.querySelector('.btn-book');
+  if(bookBtn){bookBtn.textContent='Saving…';bookBtn.disabled=true;}
+  try{
+    var data=await invoke('/save-transport','POST',{tripId:currentTripId,trip:trip});
+    if(data.ok){
+      if(bookBtn){bookBtn.textContent='✓ Saved';bookBtn.style.background='var(--success)';}
+    } else {
+      if(bookBtn){bookBtn.textContent=origText;bookBtn.disabled=false;}
+      setStatus('Failed to save: '+(data.error||'unknown error'),true);
+    }
+  }catch(e){
+    if(bookBtn){bookBtn.textContent=origText;bookBtn.disabled=false;}
+    setStatus('Error: '+e.message,true);
+  }
+  rh();
+}
+
+async function openBookingUrl(trip){
+  var fromSlug=document.getElementById('from-slug').value;
+  var toSlug=document.getElementById('to-slug').value;
+  var qs='/book-url?tripKey='+encodeURIComponent(trip.tripKey||'')+'&godate='+encodeURIComponent(trip.depTime||'')+
+    '&godate2='+encodeURIComponent((trip.addToCartParams&&trip.addToCartParams.godate2)||'')+
+    '&fromSlug='+encodeURIComponent(fromSlug)+'&toSlug='+encodeURIComponent(toSlug);
+  try{
+    var data=await invoke(qs,'GET');
+    if(data.url)window.open(data.url,'_blank');
+  }catch(_e){
+    var url='https://traveling.com/en/travel/'+fromSlug+'/'+toSlug;
+    window.open(url,'_blank');
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function setStatus(msg,err){
+  var el=document.getElementById('status');
+  el.textContent=msg;el.className='status'+(err?' error':'');el.style.display='block';
+}
+function fmtTime(dt){if(!dt)return '—';var t=dt.split(' ')[1]||dt;return t.slice(0,5);}
+function fmtDur(m){if(!m)return '—';var h=Math.floor(m/60);var min=m%60;return h?h+'h'+(min?min+'m':''):min+'m';}
+function escHtml(s){if(!s)return '';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function escAttr(s){if(!s)return '';return String(s).replace(/'/g,"\'");}
+function rh(){var h=Math.ceil(document.documentElement.scrollHeight);window.parent.postMessage({type:'trek:resize',height:h+20},'*');}
+</script>
+</body>
+</html>
