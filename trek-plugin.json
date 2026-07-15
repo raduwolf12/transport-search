@@ -1,7 +1,7 @@
 {
   "id": "transport-search",
   "name": "Transport Search",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "apiVersion": 1,
   "type": "trip-page",
   "trek": ">=3.3.0 <4.0.0",
@@ -17,6 +17,7 @@
     "http:outbound:recheck11.12go.com",
     "http:outbound:api.resrobot.se",
     "http:outbound:www.rejseplanen.dk",
+    "http:outbound:transit.land",
     "db:write:reservations",
     "rates:read"
   ],
@@ -25,7 +26,8 @@
     "recheck10.12go.com",
     "recheck11.12go.com",
     "api.resrobot.se",
-    "www.rejseplanen.dk"
+    "www.rejseplanen.dk",
+    "transit.land"
   ],
   "operatorEgress": true,
   "settings": [
@@ -34,6 +36,9 @@
       "secret": true, "hint": "Free key from developer.trafiklab.se — enables supplemental Swedish domestic transit search (all modes, not just trains) when Traveling.com has thin/no coverage. Leave blank to disable." },
     { "key": "rejseplanen_api_key", "label": "Rejseplanen API key",
       "input_type": "password", "scope": "user", "required": false,
-      "secret": true, "hint": "Key from Rejseplanen Labs (labs.rejseplanen.dk — request access, approval isn't instant) — enables supplemental Danish domestic transit search (all modes, not just trains) when Traveling.com has thin/no coverage. Leave blank to disable." }
+      "secret": true, "hint": "Key from Rejseplanen Labs (labs.rejseplanen.dk — request access, approval isn't instant) — enables supplemental Danish domestic transit search (all modes, not just trains) when Traveling.com has thin/no coverage. Leave blank to disable." },
+    { "key": "transitland_api_key", "label": "Transitland API key",
+      "input_type": "password", "scope": "user", "required": false,
+      "secret": true, "hint": "Free self-service key from transit.land (Interline account) — enables a worldwide fallback domestic transit search (via aggregated GTFS feeds) for any country not already covered above. Coverage varies by region since it depends on which feeds Transitland has ingested. Leave blank to disable." }
   ]
 }

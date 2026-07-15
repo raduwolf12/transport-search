@@ -1033,9 +1033,9 @@ async function doSearch(){
       .then(function(pd){if(pd.passes&&pd.passes.length)renderPasses(pd.passes);})
       .catch(function(){});
 
-    // Supplemental Nordic domestic transit (Trafiklab for SE, Rejseplanen for
-    // DK) — no-ops unless both ends are in the same supported country and its
-    // API key is configured.
+    // Supplemental domestic transit (Trafiklab for SE, Rejseplanen for DK,
+    // Transitland worldwide otherwise) — no-ops unless both ends are in the
+    // same country and a matching API key is configured.
     fetchTransitSupplement(fromPlace,toPlace,date,allTrips);
     if(date2)fetchTransitSupplement(toPlace,fromPlace,date2,returnTrips);
 
@@ -1046,15 +1046,15 @@ async function doSearch(){
   }
 }
 
-// Countries with a wired supplemental provider (Sweden->Trafiklab, Denmark->
-// Rejseplanen) — kept in sync with server's HAFAS_PROVIDERS. This is just an
-// early-exit to skip a pointless request; the server is the real gate.
-var TRANSIT_SUPPLEMENT_COUNTRIES=['SE','DK'];
-var SUPPLEMENT_SOURCE_LABEL={trafiklab:'Trafiklab.se',rejseplanen:'Rejseplanen.dk'};
+// Sweden->Trafiklab, Denmark->Rejseplanen, everything else (same-country pair)
+// ->Transitland's worldwide GTFS-backed fallback. The server picks the actual
+// provider; this is just an early-exit to skip a pointless request when the
+// two places aren't even in the same country.
+var SUPPLEMENT_SOURCE_LABEL={trafiklab:'Trafiklab.se',rejseplanen:'Rejseplanen.dk',transitland:'Transitland.org'};
 function fetchTransitSupplement(fromP,toP,d,targetArr){
   if(!fromP||!toP)return;
   var fc=(fromP.countryCode||'').toUpperCase(),tc=(toP.countryCode||'').toUpperCase();
-  if(fc!==tc||TRANSIT_SUPPLEMENT_COUNTRIES.indexOf(fc)===-1)return;
+  if(!fc||fc!==tc)return;
   var qs='/transit-search?fromName='+encodeURIComponent(fromP.nameFull||fromP.name)+
     '&toName='+encodeURIComponent(toP.nameFull||toP.name)+
     '&fromCountry='+encodeURIComponent(fromP.countryCode||'')+

@@ -185,6 +185,126 @@ function normalizeHafasTrip(trip, i, provider) {
   }
 }
 
+// ── Supplemental worldwide domestic transit (Transitland) ─────────────────
+// Fallback for any same-country route the Nordic HAFAS providers above don't
+// cover. Transitland aggregates GTFS feeds worldwide and answers real trip
+// queries via an OpenTripPlanner-backed routing API — coverage varies feed by
+// feed, so this can come back empty even for a real route; that's expected.
+const TRANSITLAND_SETTINGS_KEY = 'transitland_api_key'
+
+// OTP's `startTime`/`endTime` are UTC epoch-ms with no timezone field in the
+// response at all — this maps a same-country query to its one dominant IANA
+// zone so times display correctly. Multi-timezone countries aren't a concern
+// here since every query this plugin makes is domestic (same country both
+// ends); extend as more countries come up.
+const COUNTRY_TIMEZONE = {
+  RO: 'Europe/Bucharest', DE: 'Europe/Berlin', FR: 'Europe/Paris', NL: 'Europe/Amsterdam',
+  BE: 'Europe/Brussels', AT: 'Europe/Vienna', CH: 'Europe/Zurich', IT: 'Europe/Rome',
+  ES: 'Europe/Madrid', PT: 'Europe/Lisbon', PL: 'Europe/Warsaw', CZ: 'Europe/Prague',
+  SK: 'Europe/Bratislava', HU: 'Europe/Budapest', HR: 'Europe/Zagreb', SI: 'Europe/Ljubljana',
+  GR: 'Europe/Athens', BG: 'Europe/Sofia', RS: 'Europe/Belgrade', UA: 'Europe/Kyiv',
+  GB: 'Europe/London', IE: 'Europe/Dublin', FI: 'Europe/Helsinki', EE: 'Europe/Tallinn',
+  LV: 'Europe/Riga', LT: 'Europe/Vilnius', LU: 'Europe/Luxembourg',
+}
+
+function epochMsToLocalStr(ms, countryCode) {
+  if (ms == null) return null
+  const tz = COUNTRY_TIMEZONE[countryCode] || 'UTC'
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).formatToParts(new Date(ms))
+  const get = t => parts.find(p => p.type === t)?.value
+  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}:${get('second')}`
+}
+
+// OTP's own clean mode enum — no per-region keyword guessing needed here,
+// unlike the HAFAS product-name matching above.
+const OTP_MODE_MAP = {
+  RAIL: 'Train', SUBWAY: 'Transfer', TRAM: 'Transfer', GONDOLA: 'Transfer',
+  FUNICULAR: 'Transfer', CABLE_CAR: 'Transfer', BUS: 'Bus', FERRY: 'Ferry', AIRPLANE: 'Flight',
+}
+function mapOtpMode(mode) { return OTP_MODE_MAP[(mode || '').toUpperCase()] || 'Bus' }
+
+async function transitlandStopSearch(name, apiKey, ctx) {
+  const url = `https://transit.land/api/v2/rest/stops?search=${encodeURIComponent(name)}&limit=5&api_key=${encodeURIComponent(apiKey)}`
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`Transitland stops HTTP ${res.status}`)
+  const data = await res.json()
+  const stops = Array.isArray(data?.stops) ? data.stops : []
+  ctx?.log?.info?.(`Transitland stops(${name}): ${stops.length} hit(s)`)
+  const hit = stops[0]
+  if (!hit) return null
+  const [lon, lat] = hit.geometry?.coordinates || []
+  return { name: hit.stop_name, lat, lon, countryCode: hit.place?.adm0_iso || null }
+}
+
+async function transitlandPlan(fromLat, fromLon, toLat, toLon, date, time, apiKey) {
+  const url = `https://transit.land/api/v2/routing/otp/plan?fromPlace=${fromLat},${fromLon}&toPlace=${toLat},${toLon}` +
+    `&date=${encodeURIComponent(date)}&time=${encodeURIComponent(time || '08:00:00')}&api_key=${encodeURIComponent(apiKey)}`
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`Transitland routing HTTP ${res.status}`)
+  const data = await res.json()
+  return data?.plan?.itineraries || []
+}
+
+function normalizeTransitlandTrip(itin, i, countryCode) {
+  const legs = Array.isArray(itin.legs) ? itin.legs : []
+  const realLegs = legs.filter(l => l.mode && l.mode !== 'WALK')
+
+  function place(o) {
+    if (!o) return null
+    return { id: null, name: o.name, nameFull: o.name, code: null, countryCode, lat: o.lat, lng: o.lon }
+  }
+
+  const segments = realLegs.map(leg => ({
+    depTime: epochMsToLocalStr(leg.startTime, countryCode),
+    arrTime: epochMsToLocalStr(leg.endTime, countryCode),
+    durationMin: leg.duration != null ? Math.round(leg.duration / 60) : null,
+    from: place(leg.from),
+    to: place(leg.to),
+    operator: leg.agencyName || null,
+    flightNo: leg.routeShortName || leg.routeLongName || null,
+    class: null,
+  }))
+
+  const layovers = []
+  for (let s = 1; s < segments.length; s++) {
+    layovers.push({ durationMin: null, description: `Change at ${realLegs[s]?.from?.name || ''}` })
+  }
+
+  const operators = []
+  segments.forEach(s => { if (s.operator && !operators.find(o => o.name === s.operator)) operators.push({ id: null, name: s.operator, logo: null, rating: null }) })
+
+  const first = legs[0]
+  const last = legs[legs.length - 1]
+
+  return {
+    id: 'transitland-' + i,
+    tripKey: null,
+    isBookable: false,
+    vehclass: 'transit',
+    mode: mapOtpMode(realLegs[0]?.mode),
+    depTime: epochMsToLocalStr(itin.startTime, countryCode),
+    arrTime: epochMsToLocalStr(itin.endTime, countryCode),
+    durationMin: itin.duration != null ? Math.round(itin.duration / 60) : null,
+    from: place(first?.from),
+    to: place(last?.to),
+    operators,
+    price: { value: null, currency: null, display: null },
+    class: null,
+    seats: null,
+    isRefundable: false,
+    features: [{ key: 'source_transitland', text: 'Data from Transitland (transit.land)', type: 'default', variant: 'info' }],
+    segments,
+    layovers,
+    isMultiSegment: segments.length > 1,
+    addToCartParams: null,
+    logoPath: null,
+    source: 'transitland',
+  }
+}
+
 module.exports = definePlugin({
   async onLoad(ctx) { ctx.log.info('transport-search loaded') },
 
@@ -273,25 +393,48 @@ module.exports = definePlugin({
 
         const fc = (fromCountry || '').toUpperCase()
         const tc = (toCountry || '').toUpperCase()
-        // Domestic-only fallback for each provider — neither covers cross-border
-        // journeys, so both ends must match the same country.
-        const provider = fc === tc ? Object.values(HAFAS_PROVIDERS).find(p => p.countryCode === fc) : null
-        if (!provider) return safeJson(200, { trips: [] })
+        // Domestic-only fallback for every provider here — none of them cover
+        // cross-border journeys, so both ends must match the same country.
+        if (fc !== tc || !fc) return safeJson(200, { trips: [] })
 
-        const apiKey = await ctx.settings.get(provider.settingsKey)
-        if (!apiKey) return safeJson(200, { trips: [], error: 'not_configured' })
+        const provider = Object.values(HAFAS_PROVIDERS).find(p => p.countryCode === fc)
+        if (provider) {
+          const apiKey = await ctx.settings.get(provider.settingsKey)
+          if (!apiKey) return safeJson(200, { trips: [], error: 'not_configured' })
+
+          try {
+            const [origin, dest] = await Promise.all([
+              hafasLocationSearch(provider.baseUrl, fromName, apiKey, ctx),
+              hafasLocationSearch(provider.baseUrl, toName, apiKey, ctx),
+            ])
+            if (!origin || !dest) {
+              return safeJson(200, { trips: [], error: `stop lookup failed (${!origin ? `origin "${fromName}"` : `destination "${toName}"`} had no match)` })
+            }
+
+            const trips = await hafasTrip(provider.baseUrl, origin.extId || origin.id, dest.extId || dest.id, date, time, apiKey)
+            return safeJson(200, { trips: trips.map((t, i) => normalizeHafasTrip(t, i, provider)), source: provider.source })
+          } catch (e) {
+            return safeJson(200, { trips: [], error: e.message })
+          }
+        }
+
+        // No dedicated provider for this country — fall back to Transitland's
+        // worldwide (GTFS-feed-dependent) routing. Genuinely may come back
+        // empty where no feed has been ingested for the area; that's expected.
+        const tlKey = await ctx.settings.get(TRANSITLAND_SETTINGS_KEY)
+        if (!tlKey) return safeJson(200, { trips: [], error: 'not_configured' })
 
         try {
           const [origin, dest] = await Promise.all([
-            hafasLocationSearch(provider.baseUrl, fromName, apiKey, ctx),
-            hafasLocationSearch(provider.baseUrl, toName, apiKey, ctx),
+            transitlandStopSearch(fromName, tlKey, ctx),
+            transitlandStopSearch(toName, tlKey, ctx),
           ])
           if (!origin || !dest) {
             return safeJson(200, { trips: [], error: `stop lookup failed (${!origin ? `origin "${fromName}"` : `destination "${toName}"`} had no match)` })
           }
 
-          const trips = await hafasTrip(provider.baseUrl, origin.extId || origin.id, dest.extId || dest.id, date, time, apiKey)
-          return safeJson(200, { trips: trips.map((t, i) => normalizeHafasTrip(t, i, provider)), source: provider.source })
+          const itineraries = await transitlandPlan(origin.lat, origin.lon, dest.lat, dest.lon, date, time, tlKey)
+          return safeJson(200, { trips: itineraries.map((it, i) => normalizeTransitlandTrip(it, i, fc)), source: 'transitland' })
         } catch (e) {
           return safeJson(200, { trips: [], error: e.message })
         }
