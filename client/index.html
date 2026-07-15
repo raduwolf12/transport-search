@@ -696,6 +696,9 @@ body.trek-ui {
     .mode-Train{background:color-mix(in oklch,#8b5cf6 12%,transparent);color:#5b21b6;}
     .mode-Transfer{background:var(--warning-soft);color:var(--warning);}
     .mode-Ferry{background:var(--info-soft);color:var(--info);}
+    .mode-Taxi{background:var(--warning-soft);color:var(--warning);}
+    .mode-Van{background:var(--warning-soft);color:var(--warning);}
+    .trip-mode-badge[class*="+"]{background:var(--bg-tertiary);color:var(--text-muted);}
     .trip-main{flex:1;min-width:0;}
     .trip-times{display:flex;align-items:center;gap:8px;margin-bottom:4px;}
     .trip-dep,.trip-arr{font-size:17px;font-weight:800;color:var(--text-primary);}
@@ -752,9 +755,23 @@ body.trek-ui {
 <div class="page">
 
   <!-- Trip type toggle -->
-  <div style="display:flex;gap:0;margin-bottom:10px;width:fit-content;border:1px solid var(--border-primary);border-radius:var(--radius-sm);overflow:hidden;">
-    <button class="trip-type-btn active" id="btn-oneway" onclick="setTripType('oneway')" style="padding:5px 14px;font-size:12px;font-weight:600;border:none;cursor:pointer;font-family:inherit;background:var(--text-primary);color:var(--bg-primary);transition:all .12s;">One way</button>
-    <button class="trip-type-btn" id="btn-return" onclick="setTripType('return')" style="padding:5px 14px;font-size:12px;font-weight:600;border:none;cursor:pointer;font-family:inherit;background:var(--bg-secondary);color:var(--text-muted);transition:all .12s;">Return</button>
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+    <div style="display:flex;gap:0;width:fit-content;border:1px solid var(--border-primary);border-radius:var(--radius-sm);overflow:hidden;">
+      <button class="trip-type-btn active" id="btn-oneway" onclick="setTripType('oneway')" style="padding:5px 14px;font-size:12px;font-weight:600;border:none;cursor:pointer;font-family:inherit;background:var(--text-primary);color:var(--bg-primary);transition:all .12s;">One way</button>
+      <button class="trip-type-btn" id="btn-return" onclick="setTripType('return')" style="padding:5px 14px;font-size:12px;font-weight:600;border:none;cursor:pointer;font-family:inherit;background:var(--bg-secondary);color:var(--text-muted);transition:all .12s;">Return</button>
+    </div>
+    <button id="advanced-toggle-btn" onclick="toggleAdvancedPanel()" style="background:none;border:none;color:var(--text-faint);font-size:11.5px;cursor:pointer;padding:0;font-family:inherit;text-decoration:underline;">⚙ Advanced search</button>
+  </div>
+
+  <!-- Advanced search: explicit source selection (default = Traveling.com only) -->
+  <div id="advanced-panel" style="display:none;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:12px;padding:10px 12px;background:var(--bg-secondary);border-radius:var(--radius-md);">
+    <span style="font-size:11px;color:var(--text-faint);margin-right:2px;">Sources:</span>
+    <button class="filter-chip active" data-source="traveling" onclick="toggleSource(this)">Traveling.com</button>
+    <button class="filter-chip" data-source="trafiklab" onclick="toggleSource(this)">Trafiklab (SE)</button>
+    <button class="filter-chip" data-source="rejseplanen" onclick="toggleSource(this)">Rejseplanen (DK)</button>
+    <button class="filter-chip" data-source="transitous" onclick="toggleSource(this)">Transitous</button>
+    <button class="filter-chip" data-source="google_routes" onclick="toggleSource(this)">Google Routes</button>
+    <button class="filter-chip" data-source="transitland" onclick="toggleSource(this)">Transitland</button>
   </div>
 
   <!-- Search bar -->
@@ -818,6 +835,9 @@ body.trek-ui {
       <button class="filter-chip" data-mode="Bus" onclick="setFilter(this)">🚌 Buses</button>
       <button class="filter-chip" data-mode="Train" onclick="setFilter(this)">🚂 Trains</button>
       <button class="filter-chip" data-mode="Transfer" onclick="setFilter(this)">🚗 Transfers</button>
+      <button class="filter-chip" data-mode="Ferry" onclick="setFilter(this)">⛴ Ferries</button>
+      <button class="filter-chip" data-mode="Van" onclick="setFilter(this)">🚐 Vans</button>
+      <button class="filter-chip" data-mode="Taxi" onclick="setFilter(this)">🚕 Taxis</button>
       <span class="results-count" id="results-count"></span>
     </div>
     <div class="sort-row">
@@ -852,6 +872,29 @@ var currentSort='price';
 var fromPlace=null,toPlace=null;
 var recheckUrls=[];
 var recheckTimer=null;
+
+// ── Advanced search: explicit per-source selection ──────────────────────────
+// Off by default — behavior stays exactly as today (Traveling.com + the
+// automatic country-matched supplemental waterfall). Turning it on switches
+// to explicit source selection: Traveling.com starts checked, everything
+// else starts unchecked, and each checked supplemental source is queried
+// directly (bypassing the "first one wins" waterfall) so results from every
+// selected source are merged together.
+var advancedMode=false;
+var selectedSources={traveling:true,trafiklab:false,rejseplanen:false,transitous:false,google_routes:false,transitland:false};
+var SUPPLEMENTAL_SOURCE_KEYS=['trafiklab','rejseplanen','transitous','google_routes','transitland'];
+
+function toggleAdvancedPanel(){
+  advancedMode=!advancedMode;
+  document.getElementById('advanced-panel').style.display=advancedMode?'flex':'none';
+  document.getElementById('advanced-toggle-btn').textContent=advancedMode?'⚙ Advanced search (on)':'⚙ Advanced search';
+  rh();
+}
+function toggleSource(btn){
+  var key=btn.dataset.source;
+  selectedSources[key]=!selectedSources[key];
+  btn.classList.toggle('active',selectedSources[key]);
+}
 
 function setTripType(type){
   tripType=type;
@@ -1036,70 +1079,85 @@ async function doSearch(){
   document.getElementById('results-list').innerHTML='';
   document.getElementById('filter-row').style.display='none';
   document.getElementById('passes-section').style.display='none';
-  document.getElementById('loading-bar').style.display='block';
   document.getElementById('recheck-note').style.display='none';
   document.getElementById('search-btn').disabled=true;
   setStatus('Searching…');
 
-  var fromSlug=document.getElementById('from-slug').value;
-  var toSlug=document.getElementById('to-slug').value;
-  var fromCountrySlug=document.getElementById('from-country-slug').value;
-  var toCountrySlug=document.getElementById('to-country-slug').value;
+  var useTraveling=!advancedMode||selectedSources.traveling;
 
-  function buildQs(fId,tId,fSlug,tSlug,fCS,tCS,d){
-    return '/search?fromId='+encodeURIComponent(fId)+'&toId='+encodeURIComponent(tId)+
-      '&fromSlug='+encodeURIComponent(fSlug)+'&toSlug='+encodeURIComponent(tSlug)+
-      '&fromCountrySlug='+encodeURIComponent(fCS)+'&toCountrySlug='+encodeURIComponent(tCS)+
-      '&date='+encodeURIComponent(d)+'&people='+pax+'&adults='+pax;
-  }
+  if(useTraveling){
+    document.getElementById('loading-bar').style.display='block';
+    var fromSlug=document.getElementById('from-slug').value;
+    var toSlug=document.getElementById('to-slug').value;
+    var fromCountrySlug=document.getElementById('from-country-slug').value;
+    var toCountrySlug=document.getElementById('to-country-slug').value;
 
-  try{
-    // Fire outbound and (if return) inbound searches in parallel
-    var outboundPromise=invoke(buildQs(fromId,toId,fromSlug,toSlug,fromCountrySlug,toCountrySlug,date),'GET');
-    var inboundPromise=date2?invoke(buildQs(toId,fromId,toSlug,fromSlug,toCountrySlug,fromCountrySlug,date2),'GET'):Promise.resolve(null);
-
-    var [outData,inData]=await Promise.all([outboundPromise,inboundPromise]);
-
-    if(outData.error){setStatus('Error: '+outData.error,true);document.getElementById('loading-bar').style.display='none';document.getElementById('search-btn').disabled=false;return;}
-
-    allTrips=outData.trips||[];
-    recheckUrls=outData.recheckUrls||[];
-    if(inData&&!inData.error)returnTrips=inData.trips||[];
-
-    if(recheckUrls.length){
-      document.getElementById('recheck-note').style.display='block';
-      recheckTimer=setTimeout(function(){pollRecheck(recheckUrls);},2000);
-    } else {
-      document.getElementById('loading-bar').style.display='none';
+    function buildQs(fId,tId,fSlug,tSlug,fCS,tCS,d){
+      return '/search?fromId='+encodeURIComponent(fId)+'&toId='+encodeURIComponent(tId)+
+        '&fromSlug='+encodeURIComponent(fSlug)+'&toSlug='+encodeURIComponent(tSlug)+
+        '&fromCountrySlug='+encodeURIComponent(fCS)+'&toCountrySlug='+encodeURIComponent(tCS)+
+        '&date='+encodeURIComponent(d)+'&people='+pax+'&adults='+pax;
     }
 
-    renderResults();
-    document.getElementById('search-btn').disabled=false;
+    try{
+      // Fire outbound and (if return) inbound searches in parallel
+      var outboundPromise=invoke(buildQs(fromId,toId,fromSlug,toSlug,fromCountrySlug,toCountrySlug,date),'GET');
+      var inboundPromise=date2?invoke(buildQs(toId,fromId,toSlug,fromSlug,toCountrySlug,fromCountrySlug,date2),'GET'):Promise.resolve(null);
 
-    // Rail passes concurrently
-    invoke('/passes?fromId='+encodeURIComponent(fromId)+'&toId='+encodeURIComponent(toId),'GET')
-      .then(function(pd){if(pd.passes&&pd.passes.length)renderPasses(pd.passes);})
-      .catch(function(){});
+      var [outData,inData]=await Promise.all([outboundPromise,inboundPromise]);
 
-    // Supplemental domestic transit (Trafiklab for SE, Rejseplanen for DK,
-    // Transitland worldwide otherwise) — no-ops unless both ends are in the
-    // same country and a matching API key is configured.
+      if(outData.error){setStatus('Error: '+outData.error,true);document.getElementById('loading-bar').style.display='none';document.getElementById('search-btn').disabled=false;return;}
+
+      allTrips=outData.trips||[];
+      recheckUrls=outData.recheckUrls||[];
+      if(inData&&!inData.error)returnTrips=inData.trips||[];
+
+      if(recheckUrls.length){
+        document.getElementById('recheck-note').style.display='block';
+        recheckTimer=setTimeout(function(){pollRecheck(recheckUrls);},2000);
+      } else {
+        document.getElementById('loading-bar').style.display='none';
+      }
+
+      // Rail passes concurrently
+      invoke('/passes?fromId='+encodeURIComponent(fromId)+'&toId='+encodeURIComponent(toId),'GET')
+        .then(function(pd){if(pd.passes&&pd.passes.length)renderPasses(pd.passes);})
+        .catch(function(){});
+    }catch(e){
+      setStatus('Search failed: '+e.message,true);
+      document.getElementById('loading-bar').style.display='none';
+      document.getElementById('search-btn').disabled=false;
+      return;
+    }
+  }
+
+  renderResults();
+  document.getElementById('search-btn').disabled=false;
+
+  // Supplemental domestic transit. Default (non-advanced): the automatic
+  // country-matched waterfall, exactly as before. Advanced mode: query each
+  // explicitly checked source directly (bypassing the waterfall's "first one
+  // wins"), so results from every selected source are merged together.
+  if(advancedMode){
+    SUPPLEMENTAL_SOURCE_KEYS.forEach(function(key){
+      if(!selectedSources[key])return;
+      fetchTransitSupplement(fromPlace,toPlace,date,allTrips,key);
+      if(date2)fetchTransitSupplement(toPlace,fromPlace,date2,returnTrips,key);
+    });
+  } else {
     fetchTransitSupplement(fromPlace,toPlace,date,allTrips);
     if(date2)fetchTransitSupplement(toPlace,fromPlace,date2,returnTrips);
-
-  }catch(e){
-    setStatus('Search failed: '+e.message,true);
-    document.getElementById('loading-bar').style.display='none';
-    document.getElementById('search-btn').disabled=false;
   }
 }
 
 // Sweden->Trafiklab, Denmark->Rejseplanen, everything else (same-country pair)
-// ->Transitland's worldwide GTFS-backed fallback. The server picks the actual
-// provider; this is just an early-exit to skip a pointless request when the
-// two places aren't even in the same country.
-var SUPPLEMENT_SOURCE_LABEL={trafiklab:'Trafiklab.se',rejseplanen:'Rejseplanen.dk',transitland:'Transitland.org',google_routes:'Google Routes'};
-function fetchTransitSupplement(fromP,toP,d,targetArr){
+// ->Transitous/Google Routes/Transitland's worldwide fallback. In simple mode
+// the server picks the actual provider (this is just an early-exit to skip a
+// pointless request when the two places aren't even in the same country);
+// pass `forceProvider` to instead force that one specific provider (Advanced
+// Search mode), bypassing the server's own priority waterfall.
+var SUPPLEMENT_SOURCE_LABEL={trafiklab:'Trafiklab.se',rejseplanen:'Rejseplanen.dk',transitland:'Transitland.org',google_routes:'Google Routes',transitous:'Transitous'};
+function fetchTransitSupplement(fromP,toP,d,targetArr,forceProvider){
   if(!fromP||!toP)return;
   var fc=(fromP.countryCode||'').toUpperCase(),tc=(toP.countryCode||'').toUpperCase();
   if(!fc||fc!==tc)return;
@@ -1107,7 +1165,8 @@ function fetchTransitSupplement(fromP,toP,d,targetArr){
     '&toName='+encodeURIComponent(toP.nameFull||toP.name)+
     '&fromCountry='+encodeURIComponent(fromP.countryCode||'')+
     '&toCountry='+encodeURIComponent(toP.countryCode||'')+
-    '&date='+encodeURIComponent(d);
+    '&date='+encodeURIComponent(d)+
+    (forceProvider?'&provider='+encodeURIComponent(forceProvider):'');
   invoke(qs,'GET').then(function(data){
     if(data&&data.trips&&data.trips.length){
       data.trips.forEach(function(t){targetArr.push(t);});
@@ -1136,7 +1195,9 @@ async function pollRecheck(urls){
 
 // ── Filters & sort ────────────────────────────────────────────────────────────
 function setFilter(btn){
-  document.querySelectorAll('.filter-chip').forEach(function(b){b.classList.remove('active');});
+  // Scoped to #filter-row — the advanced-search source chips reuse the same
+  // .filter-chip class and must not be touched by the mode filter.
+  document.querySelectorAll('#filter-row .filter-chip').forEach(function(b){b.classList.remove('active');});
   btn.classList.add('active');
   currentFilter=btn.dataset.mode;
   renderResults();
@@ -1187,12 +1248,22 @@ function renderResults(){
 
   trips.forEach(function(t,idx){renderTripCard(t,idx,list);});
 
-  // CC-BY attribution, required whenever a supplemental-source result is shown.
-  var supSources=allTrips.concat(returnTrips).map(function(t){return SUPPLEMENT_SOURCE_LABEL[t.source];}).filter(Boolean);
-  if(supSources.length){
+  // Attribution, required whenever a supplemental-source result is shown.
+  // Transitous's terms specifically require a visible LINK (not just text) to
+  // their sources page plus OSM attribution — the others are satisfied by
+  // plain CC-BY-style text.
+  var supKeys=allTrips.concat(returnTrips).map(function(t){return t.source;}).filter(function(s){return SUPPLEMENT_SOURCE_LABEL[s];});
+  supKeys=supKeys.filter(function(v,i,a){return a.indexOf(v)===i;});
+  if(supKeys.length){
     var attr=document.createElement('div');
     attr.style.cssText='font-size:10.5px;color:var(--text-faint);text-align:right;padding:6px 2px 0;';
-    attr.textContent='Public transit data from '+supSources.filter(function(v,i,a){return a.indexOf(v)===i;}).join(', ');
+    var parts=supKeys.map(function(s){
+      if(s==='transitous'){
+        return 'Routing by <a href="https://transitous.org/sources/" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;">Transitous</a> · map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;">OpenStreetMap</a> contributors';
+      }
+      return 'Public transit data from '+escHtml(SUPPLEMENT_SOURCE_LABEL[s]);
+    });
+    attr.innerHTML=parts.join(' · ');
     list.appendChild(attr);
   }
 

@@ -185,6 +185,127 @@ function normalizeHafasTrip(trip, i, provider) {
   }
 }
 
+// ── Supplemental worldwide domestic transit (Transitous / MOTIS) ───────────
+// Free, open, community-run, NO API key at all — the best-fit fallback when
+// it has coverage, tried first among the generic (non-Nordic) providers.
+// Their terms require a descriptive User-Agent (app + real contact) and a
+// visible link to https://transitous.org/sources/ wherever results are
+// shown, plus OSM attribution — so this is gated on a contact string being
+// configured rather than ever sending an anonymous/non-compliant request to
+// their volunteer-run, best-effort infrastructure.
+const TRANSITOUS_BASE = 'https://api.transitous.org/api'
+const TRANSITOUS_CONTACT_SETTINGS_KEY = 'transitous_contact'
+const TRANSITOUS_MONTHLY_CAP = 900 // no published limit; same self-imposed courtesy cap as the other providers
+
+// Full transit-mode enum verified against MOTIS's own OpenAPI spec (not an
+// AI-summarized guess) — `RAIL` is a wildcard that expands to a whole family
+// of more specific values (HIGHSPEED_RAIL/LONG_DISTANCE/NIGHT_RAIL/etc.), and
+// real legs use the specific one (e.g. REGIONAL_RAIL for "InterRegional
+// Călători"), not the bare "RAIL" value — missing any of these silently fell
+// through to the wrong default.
+const MOTIS_MODE_MAP = {
+  RAIL: 'Train', HIGHSPEED_RAIL: 'Train', LONG_DISTANCE: 'Train', NIGHT_RAIL: 'Train',
+  REGIONAL_FAST_RAIL: 'Train', REGIONAL_RAIL: 'Train', SUBURBAN: 'Train',
+  BUS: 'Bus', COACH: 'Bus',
+  SUBWAY: 'Transfer', METRO: 'Transfer', TRAM: 'Transfer', FUNICULAR: 'Transfer',
+  AERIAL_LIFT: 'Transfer', AREAL_LIFT: 'Transfer', CABLE_CAR: 'Transfer',
+  FERRY: 'Ferry',
+  AIRPLANE: 'Flight',
+}
+function mapMotisMode(mode) { return MOTIS_MODE_MAP[(mode || '').toUpperCase()] || 'Bus' }
+
+function transitousHeaders(contact) {
+  return { 'User-Agent': `transport-search-trek-plugin/1.0 (${contact})` }
+}
+
+async function transitousGeocode(name, contact, ctx) {
+  await consumeQuota(ctx, 'transitous', TRANSITOUS_MONTHLY_CAP)
+  const url = `${TRANSITOUS_BASE}/v1/geocode?text=${encodeURIComponent(name)}&type=STOP&numResults=5`
+  const res = await fetch(url, { headers: transitousHeaders(contact) })
+  if (!res.ok) throw new Error(`Transitous geocode HTTP ${res.status}`)
+  const results = await res.json()
+  const hit = Array.isArray(results) ? results[0] : null
+  if (!hit) return null
+  // Real (observed live) shape is flat — lat/lon/tz directly on the hit, not
+  // nested under a "coordinate" object as some docs implied. `tz` is a real
+  // per-stop IANA zone, better than any country-level guess.
+  return { name: hit.name, lat: hit.lat, lon: hit.lon, tz: hit.tz || null, countryCode: hit.country || null }
+}
+
+async function transitousPlan(fromLat, fromLon, toLat, toLon, dateTimeUtcIso, contact, ctx) {
+  await consumeQuota(ctx, 'transitous', TRANSITOUS_MONTHLY_CAP)
+  const url = `${TRANSITOUS_BASE}/v6/plan?fromPlace=${fromLat},${fromLon}&toPlace=${toLat},${toLon}&time=${encodeURIComponent(dateTimeUtcIso)}`
+  const res = await fetch(url, { headers: transitousHeaders(contact) })
+  if (!res.ok) throw new Error(`Transitous plan HTTP ${res.status}`)
+  const data = await res.json()
+  return Array.isArray(data?.itineraries) ? data.itineraries : []
+}
+
+function normalizeTransitousItinerary(itin, i, countryCode, tz) {
+  const legs = Array.isArray(itin.legs) ? itin.legs : []
+  const realLegs = legs.filter(l => l.mode && l.mode !== 'WALK' && l.mode !== 'BIKE' && l.mode !== 'CAR')
+
+  // Real (observed live) shape: lat/lon/tz are flat on the stop object, not
+  // nested under a "coordinate" object as some docs implied — same mistake
+  // as the geocode endpoint. Each stop carries its own tz; fall back to the
+  // origin's tz (passed in) if a particular leg's stop omits it.
+  function place(o) {
+    if (!o) return null
+    return { id: null, name: o.name, nameFull: o.name, code: null, countryCode, lat: o.lat, lng: o.lon }
+  }
+
+  const segments = realLegs.map(leg => {
+    const legTz = leg.from?.tz || leg.to?.tz || tz
+    const depMs = leg.startTime ? new Date(leg.startTime).getTime() : null
+    const arrMs = leg.endTime ? new Date(leg.endTime).getTime() : null
+    return {
+      depTime: epochMsToLocalStrTz(depMs, legTz),
+      arrTime: epochMsToLocalStrTz(arrMs, legTz),
+      durationMin: (depMs != null && arrMs != null) ? Math.round((arrMs - depMs) / 60000) : null,
+      from: place(leg.from),
+      to: place(leg.to),
+      operator: leg.agencyName || null,
+      flightNo: leg.routeShortName || null,
+      class: null,
+    }
+  })
+
+  const layovers = []
+  for (let s = 1; s < segments.length; s++) {
+    layovers.push({ durationMin: null, description: `Change at ${segments[s].from?.name || ''}` })
+  }
+
+  const operators = []
+  segments.forEach(s => { if (s.operator && !operators.find(o => o.name === s.operator)) operators.push({ id: null, name: s.operator, logo: null, rating: null }) })
+
+  return {
+    id: 'transitous-' + i,
+    tripKey: null,
+    isBookable: false,
+    vehclass: 'transit',
+    mode: mapMotisMode(realLegs[0]?.mode),
+    depTime: segments[0]?.depTime || null,
+    arrTime: segments[segments.length - 1]?.arrTime || null,
+    durationMin: itin.duration != null ? Math.round(itin.duration / 60) : null,
+    from: segments[0]?.from || null,
+    to: segments[segments.length - 1]?.to || null,
+    operators,
+    price: { value: null, currency: null, display: null },
+    class: null,
+    seats: null,
+    isRefundable: false,
+    // Required by Transitous's terms: a visible link + OSM attribution
+    // wherever results are shown (the client renders this as real <a> links).
+    features: [{ key: 'source_transitous', text: 'Routing by Transitous · Map data © OpenStreetMap contributors', type: 'default', variant: 'info' }],
+    segments,
+    layovers,
+    isMultiSegment: segments.length > 1,
+    addToCartParams: null,
+    logoPath: null,
+    source: 'transitous',
+  }
+}
+
 // ── Supplemental worldwide domestic transit (Transitland) ─────────────────
 // Fallback for any same-country route the Nordic HAFAS providers above don't
 // cover. Transitland aggregates GTFS feeds worldwide and answers real trip
@@ -236,15 +357,17 @@ const COUNTRY_TIMEZONE = {
   LV: 'Europe/Riga', LT: 'Europe/Vilnius', LU: 'Europe/Luxembourg',
 }
 
-function epochMsToLocalStr(ms, countryCode) {
+function epochMsToLocalStrTz(ms, tz) {
   if (ms == null) return null
-  const tz = COUNTRY_TIMEZONE[countryCode] || 'UTC'
   const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    timeZone: tz || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
   }).formatToParts(new Date(ms))
   const get = t => parts.find(p => p.type === t)?.value
   return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}:${get('second')}`
+}
+function epochMsToLocalStr(ms, countryCode) {
+  return epochMsToLocalStrTz(ms, COUNTRY_TIMEZONE[countryCode] || 'UTC')
 }
 
 // OTP's own clean mode enum — no per-region keyword guessing needed here,
@@ -480,6 +603,75 @@ function normalizeGoogleRoute(route, i, countryCode) {
   }
 }
 
+// ── Core "try one provider" helpers ─────────────────────────────────────────
+// Shared by both the automatic priority waterfall and an explicit
+// single-provider request (Advanced Search mode) — each assumes its
+// credential is already resolved and present, and always resolves (never
+// throws) to { trips, source } or { trips: [], error }.
+async function tryHafasProvider(provider, fromName, toName, date, time, apiKey, ctx) {
+  try {
+    const [origin, dest] = await Promise.all([
+      hafasLocationSearch(provider.baseUrl, fromName, apiKey, ctx),
+      hafasLocationSearch(provider.baseUrl, toName, apiKey, ctx),
+    ])
+    if (!origin || !dest) {
+      return { trips: [], error: `stop lookup failed (${!origin ? `origin "${fromName}"` : `destination "${toName}"`} had no match)` }
+    }
+    const trips = await hafasTrip(provider.baseUrl, origin.extId || origin.id, dest.extId || dest.id, date, time, apiKey)
+    return { trips: trips.map((t, i) => normalizeHafasTrip(t, i, provider)), source: provider.source }
+  } catch (e) {
+    ctx?.log?.info?.(`${provider.source} failed: ${e.message}`)
+    return { trips: [], error: e.message }
+  }
+}
+
+async function tryTransitous(fromName, toName, fc, date, time, contact, ctx) {
+  try {
+    const [origin, dest] = await Promise.all([
+      transitousGeocode(fromName, contact, ctx),
+      transitousGeocode(toName, contact, ctx),
+    ])
+    if (!origin || !dest) {
+      return { trips: [], error: `stop lookup failed (${!origin ? `origin "${fromName}"` : `destination "${toName}"`} had no match)` }
+    }
+    // Prefer the origin's own real tz (from geocoding) over the country-level
+    // guess table — only fall back if it's missing.
+    const tz = origin.tz || COUNTRY_TIMEZONE[fc] || 'UTC'
+    const depDateTime = localDateTimeToUtcIso(date, time || '08:00:00', tz)
+    const itineraries = await transitousPlan(origin.lat, origin.lon, dest.lat, dest.lon, depDateTime, contact, ctx)
+    return { trips: itineraries.map((it, i) => normalizeTransitousItinerary(it, i, origin.countryCode || fc, tz)), source: 'transitous' }
+  } catch (e) {
+    ctx?.log?.info?.(`Transitous failed: ${e.message}`)
+    return { trips: [], error: e.message }
+  }
+}
+
+async function tryGoogleRoutes(fromName, fc, toName, tc, date, time, apiKey, ctx) {
+  try {
+    const routes = await googleComputeTransitRoutes(fromName, fc, toName, tc, date, time, apiKey, ctx)
+    return { trips: routes.map((r, i) => normalizeGoogleRoute(r, i, fc)), source: 'google_routes' }
+  } catch (e) {
+    ctx?.log?.info?.(`Google Routes failed: ${e.message}`)
+    return { trips: [], error: e.message }
+  }
+}
+
+async function tryTransitland(fromName, toName, date, time, fc, apiKey, ctx) {
+  try {
+    const [origin, dest] = await Promise.all([
+      transitlandStopSearch(fromName, apiKey, ctx),
+      transitlandStopSearch(toName, apiKey, ctx),
+    ])
+    if (!origin || !dest) {
+      return { trips: [], error: `stop lookup failed (${!origin ? `origin "${fromName}"` : `destination "${toName}"`} had no match)` }
+    }
+    const itineraries = await transitlandPlan(origin.lat, origin.lon, dest.lat, dest.lon, date, time, apiKey, ctx)
+    return { trips: itineraries.map((it, i) => normalizeTransitlandTrip(it, i, fc)), source: 'transitland' }
+  } catch (e) {
+    return { trips: [], error: e.message }
+  }
+}
+
 module.exports = definePlugin({
   async onLoad(ctx) { ctx.log.info('transport-search loaded') },
 
@@ -574,82 +766,101 @@ module.exports = definePlugin({
       },
     },
 
-    // ── Supplemental Nordic domestic transit search (Trafiklab for Sweden,
-    // Rejseplanen for Denmark) ──────────────────────────────────────────────────
+    // ── Supplemental domestic transit search (waterfall, or an explicit
+    // single provider for Advanced Search mode) ────────────────────────────────
     {
       method: 'GET',
       path: '/transit-search',
       auth: true,
       async handler(req, ctx) {
-        const { fromName, toName, fromCountry, toCountry, date, time } = req.query
+        const { fromName, toName, fromCountry, toCountry, date, time, provider } = req.query
         if (!fromName || !toName || !date) return safeJson(200, { trips: [] })
 
         const fc = (fromCountry || '').toUpperCase()
         const tc = (toCountry || '').toUpperCase()
-        // Domestic-only fallback for every provider here — none of them cover
+        // Domestic-only for every provider here — none of them cover
         // cross-border journeys, so both ends must match the same country.
         if (fc !== tc || !fc) return safeJson(200, { trips: [] })
 
-        const provider = Object.values(HAFAS_PROVIDERS).find(p => p.countryCode === fc)
+        // Advanced Search mode: the client asked for exactly one named
+        // provider — skip the priority waterfall entirely and try only that.
         if (provider) {
-          const apiKey = await ctx.settings.get(provider.settingsKey)
-          if (!apiKey) return safeJson(200, { trips: [], error: 'not_configured' })
+          const hafasProvider = HAFAS_PROVIDERS[provider]
+          if (hafasProvider) {
+            const apiKey = await ctx.settings.get(hafasProvider.settingsKey)
+            if (!apiKey) return safeJson(200, { trips: [], error: 'not_configured' })
+            return safeJson(200, await tryHafasProvider(hafasProvider, fromName, toName, date, time, apiKey, ctx))
+          }
+          if (provider === 'transitous') {
+            const contact = await ctx.settings.get(TRANSITOUS_CONTACT_SETTINGS_KEY)
+            if (!contact) return safeJson(200, { trips: [], error: 'not_configured' })
+            return safeJson(200, await tryTransitous(fromName, toName, fc, date, time, contact, ctx))
+          }
+          if (provider === 'google_routes') {
+            const apiKey = await ctx.settings.get(GOOGLE_ROUTES_SETTINGS_KEY)
+            if (!apiKey) return safeJson(200, { trips: [], error: 'not_configured' })
+            return safeJson(200, await tryGoogleRoutes(fromName, fc, toName, tc, date, time, apiKey, ctx))
+          }
+          if (provider === 'transitland') {
+            const apiKey = await ctx.settings.get(TRANSITLAND_SETTINGS_KEY)
+            if (!apiKey) return safeJson(200, { trips: [], error: 'not_configured' })
+            return safeJson(200, await tryTransitland(fromName, toName, date, time, fc, apiKey, ctx))
+          }
+          return safeJson(200, { trips: [], error: `unknown provider "${provider}"` })
+        }
 
-          try {
-            const [origin, dest] = await Promise.all([
-              hafasLocationSearch(provider.baseUrl, fromName, apiKey, ctx),
-              hafasLocationSearch(provider.baseUrl, toName, apiKey, ctx),
-            ])
-            if (!origin || !dest) {
-              return safeJson(200, { trips: [], error: `stop lookup failed (${!origin ? `origin "${fromName}"` : `destination "${toName}"`} had no match)` })
-            }
+        // Simple-mode default: a real waterfall — try each configured
+        // provider in order, and keep falling through, including past a
+        // dedicated country provider, whenever one comes up empty,
+        // unconfigured, or erroring. A country having its own HAFAS provider
+        // doesn't mean that provider finds a trip for every route/date; it
+        // should get first shot, not exclusive custody of that country.
+        let anyConfigured = false
+        let lastError = null
 
-            const trips = await hafasTrip(provider.baseUrl, origin.extId || origin.id, dest.extId || dest.id, date, time, apiKey)
-            return safeJson(200, { trips: trips.map((t, i) => normalizeHafasTrip(t, i, provider)), source: provider.source })
-          } catch (e) {
-            return safeJson(200, { trips: [], error: e.message })
+        const hafasProvider = Object.values(HAFAS_PROVIDERS).find(p => p.countryCode === fc)
+        if (hafasProvider) {
+          const apiKey = await ctx.settings.get(hafasProvider.settingsKey)
+          if (apiKey) {
+            anyConfigured = true
+            const r = await tryHafasProvider(hafasProvider, fromName, toName, date, time, apiKey, ctx)
+            if (r.trips.length) return safeJson(200, r)
+            lastError = r.error
           }
         }
 
-        // No dedicated provider for this country — try Google Routes first
-        // (real worldwide coverage), then Transitland (currently US-only
-        // during its routing beta, so mostly a no-op elsewhere for now).
+        // Generic worldwide fallbacks, tried in order: Transitous (free, no
+        // key, best-effort community infra — best fit when it has coverage),
+        // Google Routes (paid, real worldwide coverage), Transitland
+        // (currently US-only during its routing beta, so mostly a no-op
+        // elsewhere for now). Each is skipped if unconfigured; the first to
+        // return real results wins.
+        const transitousContact = await ctx.settings.get(TRANSITOUS_CONTACT_SETTINGS_KEY)
+        if (transitousContact) {
+          anyConfigured = true
+          const r = await tryTransitous(fromName, toName, fc, date, time, transitousContact, ctx)
+          if (r.trips.length) return safeJson(200, r)
+          lastError = r.error
+        }
+
         const googleKey = await ctx.settings.get(GOOGLE_ROUTES_SETTINGS_KEY)
-        let googleError = null
         if (googleKey) {
-          try {
-            const routes = await googleComputeTransitRoutes(fromName, fc, toName, tc, date, time, googleKey, ctx)
-            if (routes.length) {
-              return safeJson(200, { trips: routes.map((r, i) => normalizeGoogleRoute(r, i, fc)), source: 'google_routes' })
-            }
-            // No routes found — fall through to Transitland rather than erroring.
-          } catch (e) {
-            googleError = e.message
-            ctx?.log?.info?.(`Google Routes failed, falling back to Transitland: ${e.message}`)
-          }
+          anyConfigured = true
+          const r = await tryGoogleRoutes(fromName, fc, toName, tc, date, time, googleKey, ctx)
+          if (r.trips.length) return safeJson(200, r)
+          lastError = r.error
         }
 
         const tlKey = await ctx.settings.get(TRANSITLAND_SETTINGS_KEY)
-        if (!tlKey) {
-          if (googleError) return safeJson(200, { trips: [], error: googleError })
-          if (!googleKey) return safeJson(200, { trips: [], error: 'not_configured' })
-          return safeJson(200, { trips: [] }) // Google configured and returned cleanly empty
+        if (tlKey) {
+          anyConfigured = true
+          const r = await tryTransitland(fromName, toName, date, time, fc, tlKey, ctx)
+          if (r.trips.length) return safeJson(200, r)
+          lastError = r.error
         }
 
-        try {
-          const [origin, dest] = await Promise.all([
-            transitlandStopSearch(fromName, tlKey, ctx),
-            transitlandStopSearch(toName, tlKey, ctx),
-          ])
-          if (!origin || !dest) {
-            return safeJson(200, { trips: [], error: `stop lookup failed (${!origin ? `origin "${fromName}"` : `destination "${toName}"`} had no match)` })
-          }
-
-          const itineraries = await transitlandPlan(origin.lat, origin.lon, dest.lat, dest.lon, date, time, tlKey, ctx)
-          return safeJson(200, { trips: itineraries.map((it, i) => normalizeTransitlandTrip(it, i, fc)), source: 'transitland' })
-        } catch (e) {
-          return safeJson(200, { trips: [], error: e.message })
-        }
+        if (!anyConfigured) return safeJson(200, { trips: [], error: 'not_configured' })
+        return safeJson(200, { trips: [], error: lastError || undefined })
       },
     },
 
@@ -874,6 +1085,25 @@ module.exports = definePlugin({
       },
     },
 
+    // ── Rail passes ──────────────────────────────────────────────────────────────
+    {
+      method: 'GET',
+      path: '/passes',
+      auth: true,
+      async handler(req, ctx) {
+        const { fromId, toId } = req.query
+        if (!fromId || !toId) return safeJson(200, { passes: [] })
+        try {
+          const url = `https://traveling.com/api/nuxt/en/railpasses/hybridSearch?fromPlaceId=${encodeURIComponent(fromId)}&toPlaceId=${encodeURIComponent(toId)}`
+          const data = await fetchJson(url, ctx)
+          const passes = data.passes || []
+          return safeJson(200, { passes: passes.map(normalizePass) })
+        } catch (e) {
+          return safeJson(200, { passes: [], error: e.message })
+        }
+      },
+    },
+
     // ── Build booking URL ─────────────────────────────────────────────────────
     {
       method: 'GET',
@@ -898,7 +1128,7 @@ function normalizeTrip(t) {
   if (!t) return null
   const opt = (t.travel_options || [])[0] || {}
   const price = opt.min_price || opt.price || t.min_price || {}
-  const vehclass = (t.vehclasses || [])[0] || 'unknown'
+  const vehclasses = t.vehclasses && t.vehclasses.length ? t.vehclasses : ['unknown']
   const segments = (t.segments || []).filter(s => s.type === 'route')
   const waits = (t.segments || []).filter(s => s.type === 'wait')
 
@@ -906,8 +1136,8 @@ function normalizeTrip(t) {
     id: t.id,
     tripKey: opt.trip_key || t.trip_key,
     isBookable: t.is_bookable,
-    vehclass,                          // avia | bus | train | charter | ferry
-    mode: vehclassToMode(vehclass),    // Flight | Bus | Train | Transfer | Ferry
+    vehclass: vehclasses,              // avia | bus | train | charter | ferry | taxi | van (one or more)
+    mode: vehclassesToMode(vehclasses), // Flight | Bus | Train | Transfer | Ferry | Taxi | Van, or e.g. "Bus+Van" when mixed
     depTime: t.dep_time,
     arrTime: t.arr_time,
     durationMin: t.duration,
@@ -952,9 +1182,14 @@ function normPlace(p) {
   return { id: p.id, name: p.name, nameFull: p.name_full || p.name, code: p.code || null, countryCode: p.country_code, lat: p.lat, lng: p.lng }
 }
 
-function vehclassToMode(v) {
-  const map = { avia: 'Flight', bus: 'Bus', train: 'Train', charter: 'Transfer', ferry: 'Ferry', taxi: 'Taxi' }
-  return map[v] || v
+const VEHCLASS_MODE_MAP = { avia: 'Flight', bus: 'Bus', train: 'Train', charter: 'Transfer', ferry: 'Ferry', taxi: 'Taxi', van: 'Van' }
+function vehclassToMode(v) { return VEHCLASS_MODE_MAP[v] || v }
+// A trip can combine more than one vehicle class across its segments (e.g.
+// "bus+van", "taxi+bus", "train+van") — label those distinctly rather than
+// silently collapsing to just the first class.
+function vehclassesToMode(vehclasses) {
+  const modes = [...new Set(vehclasses.map(vehclassToMode))]
+  return modes.join('+')
 }
 
 function normalizePass(p) {

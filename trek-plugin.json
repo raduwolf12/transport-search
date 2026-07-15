@@ -1,7 +1,7 @@
 {
   "id": "transport-search",
   "name": "Transport Search",
-  "version": "1.5.0",
+  "version": "1.7.0",
   "apiVersion": 1,
   "type": "trip-page",
   "trek": ">=3.3.0 <4.0.0",
@@ -20,6 +20,7 @@
     "http:outbound:www.rejseplanen.dk",
     "http:outbound:transit.land",
     "http:outbound:routes.googleapis.com",
+    "http:outbound:api.transitous.org",
     "db:write:reservations",
     "rates:read"
   ],
@@ -30,7 +31,8 @@
     "api.resrobot.se",
     "www.rejseplanen.dk",
     "transit.land",
-    "routes.googleapis.com"
+    "routes.googleapis.com",
+    "api.transitous.org"
   ],
   "operatorEgress": true,
   "settings": [
@@ -40,11 +42,14 @@
     { "key": "rejseplanen_api_key", "label": "Rejseplanen API key",
       "input_type": "password", "scope": "user", "required": false,
       "secret": true, "hint": "Key from Rejseplanen Labs (labs.rejseplanen.dk — request access, approval isn't instant) — enables supplemental Danish domestic transit search (all modes, not just trains) when Traveling.com has thin/no coverage. Leave blank to disable." },
+    { "key": "transitous_contact", "label": "Transitous contact info", "input_type": "text",
+      "scope": "user", "required": false, "secret": false,
+      "hint": "A URL or email identifying you (e.g. your GitHub profile or an email address) — required by transitous.org's terms of use for their free, no-API-key, community-run routing service (no billing, no signup). Tried FIRST as the worldwide fallback since it's free and has real coverage. Leave blank to disable (won't send anonymous requests to their volunteer-run infrastructure)." },
     { "key": "google_routes_api_key", "label": "Google Routes API key",
       "input_type": "password", "scope": "user", "required": false,
       "secret": true, "hint": "API key from a Google Cloud project with billing enabled and the Routes API turned on (console.cloud.google.com) — enables a worldwide fallback domestic transit search with real coverage. This is a paid commercial API (a card must be on file), though personal use should stay within the free monthly bundled calls. Capped at 9,000 requests/month by this plugin as a safety margin. Leave blank to disable." },
     { "key": "transitland_api_key", "label": "Transitland API key",
       "input_type": "password", "scope": "user", "required": false,
-      "secret": true, "hint": "Free self-service key from transit.land (Interline account) — needs BOTH the Free (REST) and Transitland Routing API - Beta plans. Secondary fallback, tried only if Google Routes isn't configured or finds nothing. NOTE: the Routing API beta currently only covers United States operators, so non-US routes will return no results until Interline expands it. Leave blank to disable." }
+      "secret": true, "hint": "Free self-service key from transit.land (Interline account) — needs BOTH the Free (REST) and Transitland Routing API - Beta plans. Last-resort fallback, tried only if Transitous and Google Routes aren't configured or find nothing. NOTE: the Routing API beta currently only covers United States operators, so non-US routes will return no results until Interline expands it. Leave blank to disable." }
   ]
 }
