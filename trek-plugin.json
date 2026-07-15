@@ -1,7 +1,7 @@
 {
   "id": "transport-search",
   "name": "Transport Search",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "apiVersion": 1,
   "type": "trip-page",
   "trek": ">=3.3.0 <4.0.0",
@@ -19,6 +19,7 @@
     "http:outbound:api.resrobot.se",
     "http:outbound:www.rejseplanen.dk",
     "http:outbound:transit.land",
+    "http:outbound:routes.googleapis.com",
     "db:write:reservations",
     "rates:read"
   ],
@@ -28,7 +29,8 @@
     "recheck11.12go.com",
     "api.resrobot.se",
     "www.rejseplanen.dk",
-    "transit.land"
+    "transit.land",
+    "routes.googleapis.com"
   ],
   "operatorEgress": true,
   "settings": [
@@ -38,8 +40,11 @@
     { "key": "rejseplanen_api_key", "label": "Rejseplanen API key",
       "input_type": "password", "scope": "user", "required": false,
       "secret": true, "hint": "Key from Rejseplanen Labs (labs.rejseplanen.dk — request access, approval isn't instant) — enables supplemental Danish domestic transit search (all modes, not just trains) when Traveling.com has thin/no coverage. Leave blank to disable." },
+    { "key": "google_routes_api_key", "label": "Google Routes API key",
+      "input_type": "password", "scope": "user", "required": false,
+      "secret": true, "hint": "API key from a Google Cloud project with billing enabled and the Routes API turned on (console.cloud.google.com) — enables a worldwide fallback domestic transit search with real coverage. This is a paid commercial API (a card must be on file), though personal use should stay within the free monthly bundled calls. Capped at 9,000 requests/month by this plugin as a safety margin. Leave blank to disable." },
     { "key": "transitland_api_key", "label": "Transitland API key",
       "input_type": "password", "scope": "user", "required": false,
-      "secret": true, "hint": "Free self-service key from transit.land (Interline account) — enables a worldwide fallback domestic transit search (via aggregated GTFS feeds) for any country not already covered above. Coverage varies by region since it depends on which feeds Transitland has ingested. Leave blank to disable." }
+      "secret": true, "hint": "Free self-service key from transit.land (Interline account) — needs BOTH the Free (REST) and Transitland Routing API - Beta plans. Secondary fallback, tried only if Google Routes isn't configured or finds nothing. NOTE: the Routing API beta currently only covers United States operators, so non-US routes will return no results until Interline expands it. Leave blank to disable." }
   ]
 }

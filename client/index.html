@@ -860,11 +860,15 @@ function setTripType(type){
   document.getElementById('btn-return').style.background=type==='return'?'var(--text-primary)':'var(--bg-secondary)';
   document.getElementById('btn-return').style.color=type==='return'?'var(--bg-primary)':'var(--text-muted)';
   document.getElementById('return-date-wrap').style.display=type==='return'?'block':'none';
-  // Set return date default to +7 days from depart
-  if(type==='return'&&!document.getElementById('date2-input').value){
-    var d=new Date(document.getElementById('date-input').value||Date.now());
-    d.setDate(d.getDate()+7);
-    document.getElementById('date2-input').value=d.toISOString().slice(0,10);
+  if(type==='return'){
+    updateReturnMin();
+    // Set return date default to +7 days from depart, clamped to the trip's range
+    if(!document.getElementById('date2-input').value){
+      var d=new Date(document.getElementById('date-input').value||Date.now());
+      d.setDate(d.getDate()+7);
+      var date2=document.getElementById('date2-input');
+      date2.value=clampDateStr(d.toISOString().slice(0,10),date2.min||null,tripEndDate);
+    }
   }
   rh();
 }
@@ -887,12 +891,52 @@ window.addEventListener('message',function(e){
 
 // ── Context ──────────────────────────────────────────────────────────────────
 var currentTripId=null;
+var tripStartDate=null,tripEndDate=null; // 'YYYY-MM-DD' or null if the trip is undated
 
-function onContext(ctx){
+// ISO 'YYYY-MM-DD' strings compare correctly with plain string operators.
+function clampDateStr(d,min,max){
+  if(min&&d<min)return min;
+  if(max&&d>max)return max;
+  return d;
+}
+
+// Return date can never be before whatever depart date is chosen, and neither
+// date may fall outside the trip's own date range.
+function updateReturnMin(){
+  var dateInput=document.getElementById('date-input');
+  var date2Input=document.getElementById('date2-input');
+  date2Input.min=dateInput.value||tripStartDate||'';
+  date2Input.max=tripEndDate||'';
+  if(date2Input.value){
+    date2Input.value=clampDateStr(date2Input.value,date2Input.min,tripEndDate);
+  }
+}
+
+function applyDateBounds(){
+  var dateInput=document.getElementById('date-input');
+  dateInput.min=tripStartDate||'';
+  dateInput.max=tripEndDate||'';
+  if(dateInput.value){
+    dateInput.value=clampDateStr(dateInput.value,tripStartDate,tripEndDate);
+  }
+  updateReturnMin();
+}
+
+async function onContext(ctx){
   currentTripId = ctx.tripId || null;
-  // Set today's date as default
-  var today=new Date();
-  document.getElementById('date-input').value=today.toISOString().slice(0,10);
+  tripStartDate=null;tripEndDate=null;
+  if(currentTripId){
+    try{
+      var range=await invoke('/trip-range?tripId='+encodeURIComponent(currentTripId),'GET');
+      tripStartDate=(range&&range.startDate)||null;
+      tripEndDate=(range&&range.endDate)||null;
+    }catch(_e){}
+  }
+  // Default to today, clamped into the trip's range (e.g. a future trip
+  // defaults to its start date rather than an out-of-range "today").
+  var today=new Date().toISOString().slice(0,10);
+  document.getElementById('date-input').value=clampDateStr(today,tripStartDate,tripEndDate);
+  applyDateBounds();
   rh();
 }
 
@@ -947,6 +991,7 @@ function initPlaceInput(prefix){
 }
 initPlaceInput('from');
 initPlaceInput('to');
+document.getElementById('date-input').addEventListener('change',updateReturnMin);
 
 // ── Pax ──────────────────────────────────────────────────────────────────────
 function setPax(d){pax=Math.max(1,Math.min(9,pax+d));document.getElementById('pax-val').textContent=pax;}
@@ -981,6 +1026,9 @@ async function doSearch(){
   if(!fromId||!toId){setStatus('Please select both origin and destination from the dropdown.');return;}
   if(!date){setStatus('Please select a departure date.');return;}
   if(tripType==='return'&&!date2){setStatus('Please select a return date.');return;}
+  // Defensive re-check — native min/max isn't bulletproof in every browser.
+  if((tripStartDate&&date<tripStartDate)||(tripEndDate&&date>tripEndDate)){setStatus('Departure date must be within the trip’s dates ('+tripStartDate+' to '+tripEndDate+').',true);return;}
+  if(date2&&((date2<date)||(tripEndDate&&date2>tripEndDate))){setStatus('Return date must be on or after departure and within the trip’s dates.',true);return;}
 
   // Clear previous
   allTrips=[];returnTrips=[];recheckUrls=[];
@@ -1050,7 +1098,7 @@ async function doSearch(){
 // ->Transitland's worldwide GTFS-backed fallback. The server picks the actual
 // provider; this is just an early-exit to skip a pointless request when the
 // two places aren't even in the same country.
-var SUPPLEMENT_SOURCE_LABEL={trafiklab:'Trafiklab.se',rejseplanen:'Rejseplanen.dk',transitland:'Transitland.org'};
+var SUPPLEMENT_SOURCE_LABEL={trafiklab:'Trafiklab.se',rejseplanen:'Rejseplanen.dk',transitland:'Transitland.org',google_routes:'Google Routes'};
 function fetchTransitSupplement(fromP,toP,d,targetArr){
   if(!fromP||!toP)return;
   var fc=(fromP.countryCode||'').toUpperCase(),tc=(toP.countryCode||'').toUpperCase();

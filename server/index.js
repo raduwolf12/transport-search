@@ -190,27 +190,36 @@ function normalizeHafasTrip(trip, i, provider) {
 // cover. Transitland aggregates GTFS feeds worldwide and answers real trip
 // queries via an OpenTripPlanner-backed routing API — coverage varies feed by
 // feed, so this can come back empty even for a real route; that's expected.
+// As of this beta, Interline scopes the Routing API to US operators only, so
+// non-US searches will reliably return zero trips until that changes — this
+// is written to degrade to empty results, not to error, so it's harmless to
+// leave wired in for whenever coverage expands.
 const TRANSITLAND_SETTINGS_KEY = 'transitland_api_key'
-// Self-imposed courtesy cap, independent of whatever quota the user's own
-// Transitland account has — counts actual outbound requests to transit.land
-// (each search makes up to 3: 2 stop lookups + 1 plan call).
-const TRANSITLAND_MONTHLY_CAP = 10000
+// Self-imposed courtesy cap. Kept under the real "Transitland Routing API -
+// Beta" plan's own limit (1,000 routing queries/month) with some headroom,
+// since that's the tighter of the two Transitland products this plugin uses
+// (the base "Free" REST plan's own monthly quota, if any, isn't published).
+// Counts actual outbound requests to transit.land — each search makes up to
+// 3: 2 stop lookups (Free plan) + 1 plan call (Routing Beta plan).
+const TRANSITLAND_MONTHLY_CAP = 900
 
-// Persisted in the plugin's own SQLite (survives restarts). Increments first,
-// then checks — a tiny race between concurrent calls can overshoot by a
-// request or two, which is fine for a soft courtesy cap.
-async function transitlandQuotaConsume(ctx) {
-  await ctx.db.migrate('transitland_quota_v1', 'CREATE TABLE IF NOT EXISTS transitland_quota (month TEXT PRIMARY KEY, count INTEGER NOT NULL)')
+// Persisted in the plugin's own SQLite (survives restarts), one row per
+// (provider, month). Increments first, then checks — a tiny race between
+// concurrent calls can overshoot the cap by a request or two, which is fine
+// for a soft courtesy cap (this isn't a hard billing boundary).
+async function consumeQuota(ctx, provider, cap) {
+  await ctx.db.migrate('provider_quota_v1', 'CREATE TABLE IF NOT EXISTS provider_quota (provider TEXT NOT NULL, month TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY (provider, month))')
   const month = new Date().toISOString().slice(0, 7) // 'YYYY-MM'
   await ctx.db.exec(
-    'INSERT INTO transitland_quota (month, count) VALUES (?, 1) ON CONFLICT(month) DO UPDATE SET count = count + 1',
-    month,
+    'INSERT INTO provider_quota (provider, month, count) VALUES (?, ?, 1) ON CONFLICT(provider, month) DO UPDATE SET count = count + 1',
+    provider, month,
   )
-  const rows = await ctx.db.query('SELECT count FROM transitland_quota WHERE month = ?', month)
-  if ((rows[0]?.count || 0) > TRANSITLAND_MONTHLY_CAP) {
-    throw new Error(`Transitland monthly request cap (${TRANSITLAND_MONTHLY_CAP}) reached for ${month} — try again next month`)
+  const rows = await ctx.db.query('SELECT count FROM provider_quota WHERE provider = ? AND month = ?', provider, month)
+  if ((rows[0]?.count || 0) > cap) {
+    throw new Error(`${provider} monthly request cap (${cap}) reached for ${month} — try again next month`)
   }
 }
+async function transitlandQuotaConsume(ctx) { return consumeQuota(ctx, 'transitland', TRANSITLAND_MONTHLY_CAP) }
 
 // OTP's `startTime`/`endTime` are UTC epoch-ms with no timezone field in the
 // response at all — this maps a same-country query to its one dominant IANA
@@ -327,10 +336,172 @@ function normalizeTransitlandTrip(itin, i, countryCode) {
   }
 }
 
+// ── Supplemental worldwide domestic transit (Google Routes API) ────────────
+// Real global transit coverage (unlike Transitland's currently US-only
+// routing beta), and origin/destination can be plain address strings — no
+// separate geocoding step needed, one request per search. Unlike the other
+// three providers this is a paid commercial API requiring a Google Cloud
+// billing account; a self-imposed monthly cap (below) guards against runaway
+// billing since Google just charges past its bundled free volume rather than
+// hard-blocking like Transitland's 401.
+const GOOGLE_ROUTES_SETTINGS_KEY = 'google_routes_api_key'
+const GOOGLE_ROUTES_MONTHLY_CAP = 9000 // headroom under the ~10k Compute Routes Essentials calls bundled free
+
+const GOOGLE_VEHICLE_MODE_MAP = {
+  RAIL: 'Train', HEAVY_RAIL: 'Train', HIGH_SPEED_TRAIN: 'Train', LONG_DISTANCE_TRAIN: 'Train',
+  COMMUTER_TRAIN: 'Train', MONORAIL: 'Train',
+  BUS: 'Bus', INTERCITY_BUS: 'Bus', TROLLEYBUS: 'Bus', SHARE_TAXI: 'Bus',
+  SUBWAY: 'Transfer', METRO_RAIL: 'Transfer', TRAM: 'Transfer', CABLE_CAR: 'Transfer',
+  GONDOLA_LIFT: 'Transfer', FUNICULAR: 'Transfer',
+  FERRY: 'Ferry',
+}
+function mapGoogleVehicleMode(type) { return GOOGLE_VEHICLE_MODE_MAP[(type || '').toUpperCase()] || 'Bus' }
+
+// The request needs departureTime as a UTC instant, but we only have the
+// origin's LOCAL wall-clock date+time — convert using the same country-level
+// zone guess used for Transitland (fine: every query here is domestic).
+function localDateTimeToUtcIso(dateStr, timeStr, tz) {
+  const [y, mo, d] = dateStr.split('-').map(Number)
+  const [h, mi, s] = (timeStr || '08:00:00').split(':').map(Number)
+  const naiveUtcMs = Date.UTC(y, mo - 1, d, h, mi, s || 0)
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz, hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(new Date(naiveUtcMs))
+  const get = t => Number(parts.find(p => p.type === t)?.value)
+  const asUtcIfLocal = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'))
+  return new Date(naiveUtcMs - (asUtcIfLocal - naiveUtcMs)).toISOString()
+}
+
+// Converts one of Google's own RFC3339 instants using the IANA zone Google
+// itself reports for that stop (localizedValues.*.timeZone) — more precise
+// than the country-guess table since it's the API's own answer, not ours.
+function googleInstantToLocalStr(iso, tz) {
+  if (!iso) return null
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).formatToParts(new Date(iso))
+  const get = t => parts.find(p => p.type === t)?.value
+  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}:${get('second')}`
+}
+
+async function googleComputeTransitRoutes(fromName, fromCountry, toName, toCountry, date, time, apiKey, ctx) {
+  await consumeQuota(ctx, 'google_routes', GOOGLE_ROUTES_MONTHLY_CAP)
+  const tz = COUNTRY_TIMEZONE[fromCountry] || 'UTC'
+  const body = {
+    origin: { address: `${fromName}, ${fromCountry}` },
+    destination: { address: `${toName}, ${toCountry}` },
+    travelMode: 'TRANSIT',
+    departureTime: localDateTimeToUtcIso(date, time || '08:00:00', tz),
+    computeAlternativeRoutes: true,
+  }
+  const res = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': apiKey,
+      'X-Goog-FieldMask': 'routes.duration,routes.legs.duration,routes.legs.steps.transitDetails',
+    },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => '')
+    throw new Error(`Google Routes HTTP ${res.status}${errBody ? ': ' + errBody.slice(0, 200) : ''}`)
+  }
+  const data = await res.json()
+  return Array.isArray(data?.routes) ? data.routes : []
+}
+
+function normalizeGoogleRoute(route, i, countryCode) {
+  const leg = (route.legs || [])[0] || {}
+  const steps = Array.isArray(leg.steps) ? leg.steps : []
+  const transitSteps = steps.filter(s => s.transitDetails)
+
+  function place(stop) {
+    if (!stop) return null
+    return { id: null, name: stop.name, nameFull: stop.name, code: null, countryCode, lat: stop.location?.latLng?.latitude, lng: stop.location?.latLng?.longitude }
+  }
+
+  const segments = transitSteps.map(step => {
+    const td = step.transitDetails
+    const sd = td.stopDetails || {}
+    const tz = td.localizedValues?.arrivalTime?.timeZone || td.localizedValues?.departureTime?.timeZone
+    const depMs = sd.departureTime ? new Date(sd.departureTime).getTime() : null
+    const arrMs = sd.arrivalTime ? new Date(sd.arrivalTime).getTime() : null
+    return {
+      depTime: googleInstantToLocalStr(sd.departureTime, tz),
+      arrTime: googleInstantToLocalStr(sd.arrivalTime, tz),
+      durationMin: (depMs != null && arrMs != null) ? Math.round((arrMs - depMs) / 60000) : null,
+      from: place(sd.departureStop),
+      to: place(sd.arrivalStop),
+      operator: (td.transitLine?.agencies || [])[0]?.name || null,
+      flightNo: td.transitLine?.nameShort || td.transitLine?.name || null,
+      class: null,
+    }
+  })
+
+  const layovers = []
+  for (let s = 1; s < segments.length; s++) {
+    layovers.push({ durationMin: null, description: `Change at ${segments[s].from?.name || ''}` })
+  }
+
+  const operators = []
+  segments.forEach(s => { if (s.operator && !operators.find(o => o.name === s.operator)) operators.push({ id: null, name: s.operator, logo: null, rating: null }) })
+
+  const firstMode = transitSteps[0]?.transitDetails?.transitLine?.vehicle?.type
+  const durSec = Number((route.duration || '0s').replace('s', '')) || null
+
+  return {
+    id: 'google-' + i,
+    tripKey: null,
+    isBookable: false,
+    vehclass: 'transit',
+    mode: mapGoogleVehicleMode(firstMode),
+    depTime: segments[0]?.depTime || null,
+    arrTime: segments[segments.length - 1]?.arrTime || null,
+    durationMin: durSec ? Math.round(durSec / 60) : null,
+    from: segments[0]?.from || null,
+    to: segments[segments.length - 1]?.to || null,
+    operators,
+    price: { value: null, currency: null, display: null },
+    class: null,
+    seats: null,
+    isRefundable: false,
+    // Required by Google's Terms of Service when not shown on a Google Map.
+    features: [{ key: 'source_google_routes', text: 'Powered by Google', type: 'default', variant: 'info' }],
+    segments,
+    layovers,
+    isMultiSegment: segments.length > 1,
+    addToCartParams: null,
+    logoPath: null,
+    source: 'google_routes',
+  }
+}
+
 module.exports = definePlugin({
   async onLoad(ctx) { ctx.log.info('transport-search loaded') },
 
   routes: [
+
+    // ── Trip date range (bounds for the Depart/Return date pickers) ────────────
+    {
+      method: 'GET',
+      path: '/trip-range',
+      auth: true,
+      async handler(req, ctx) {
+        const tripId = Number(req.query.tripId)
+        if (!tripId) return safeJson(200, { startDate: null, endDate: null })
+        try {
+          const trips = await ctx.trips.listMine()
+          const trip = (trips || []).find(t => t.id === tripId)
+          return safeJson(200, { startDate: trip?.start_date || null, endDate: trip?.end_date || null })
+        } catch (e) {
+          return safeJson(200, { startDate: null, endDate: null, error: e.message })
+        }
+      },
+    },
 
     // ── Place autocomplete ────────────────────────────────────────────────────
     {
@@ -440,11 +611,30 @@ module.exports = definePlugin({
           }
         }
 
-        // No dedicated provider for this country — fall back to Transitland's
-        // worldwide (GTFS-feed-dependent) routing. Genuinely may come back
-        // empty where no feed has been ingested for the area; that's expected.
+        // No dedicated provider for this country — try Google Routes first
+        // (real worldwide coverage), then Transitland (currently US-only
+        // during its routing beta, so mostly a no-op elsewhere for now).
+        const googleKey = await ctx.settings.get(GOOGLE_ROUTES_SETTINGS_KEY)
+        let googleError = null
+        if (googleKey) {
+          try {
+            const routes = await googleComputeTransitRoutes(fromName, fc, toName, tc, date, time, googleKey, ctx)
+            if (routes.length) {
+              return safeJson(200, { trips: routes.map((r, i) => normalizeGoogleRoute(r, i, fc)), source: 'google_routes' })
+            }
+            // No routes found — fall through to Transitland rather than erroring.
+          } catch (e) {
+            googleError = e.message
+            ctx?.log?.info?.(`Google Routes failed, falling back to Transitland: ${e.message}`)
+          }
+        }
+
         const tlKey = await ctx.settings.get(TRANSITLAND_SETTINGS_KEY)
-        if (!tlKey) return safeJson(200, { trips: [], error: 'not_configured' })
+        if (!tlKey) {
+          if (googleError) return safeJson(200, { trips: [], error: googleError })
+          if (!googleKey) return safeJson(200, { trips: [], error: 'not_configured' })
+          return safeJson(200, { trips: [] }) // Google configured and returned cleanly empty
+        }
 
         try {
           const [origin, dest] = await Promise.all([
