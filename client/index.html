@@ -905,12 +905,12 @@ function setTripType(type){
   document.getElementById('return-date-wrap').style.display=type==='return'?'block':'none';
   if(type==='return'){
     updateReturnMin();
-    // Set return date default to +7 days from depart, clamped to the trip's range
+    // Set return date default to +7 days from depart
     if(!document.getElementById('date2-input').value){
       var d=new Date(document.getElementById('date-input').value||Date.now());
       d.setDate(d.getDate()+7);
       var date2=document.getElementById('date2-input');
-      date2.value=clampDateStr(d.toISOString().slice(0,10),date2.min||null,tripEndDate);
+      date2.value=clampDateStr(d.toISOString().slice(0,10),date2.min||null,null);
     }
   }
   rh();
@@ -943,25 +943,18 @@ function clampDateStr(d,min,max){
   return d;
 }
 
-// Return date can never be before whatever depart date is chosen, and neither
-// date may fall outside the trip's own date range.
+// Return date can never be before whatever depart date is chosen. Dates are
+// otherwise unrestricted — the trip's own date range is no longer enforced.
 function updateReturnMin(){
   var dateInput=document.getElementById('date-input');
   var date2Input=document.getElementById('date2-input');
-  date2Input.min=dateInput.value||tripStartDate||'';
-  date2Input.max=tripEndDate||'';
+  date2Input.min=dateInput.value||'';
   if(date2Input.value){
-    date2Input.value=clampDateStr(date2Input.value,date2Input.min,tripEndDate);
+    date2Input.value=clampDateStr(date2Input.value,date2Input.min,null);
   }
 }
 
 function applyDateBounds(){
-  var dateInput=document.getElementById('date-input');
-  dateInput.min=tripStartDate||'';
-  dateInput.max=tripEndDate||'';
-  if(dateInput.value){
-    dateInput.value=clampDateStr(dateInput.value,tripStartDate,tripEndDate);
-  }
   updateReturnMin();
 }
 
@@ -975,10 +968,9 @@ async function onContext(ctx){
       tripEndDate=(range&&range.endDate)||null;
     }catch(_e){}
   }
-  // Default to today, clamped into the trip's range (e.g. a future trip
-  // defaults to its start date rather than an out-of-range "today").
+  // Default to the trip's start date if set, otherwise today.
   var today=new Date().toISOString().slice(0,10);
-  document.getElementById('date-input').value=clampDateStr(today,tripStartDate,tripEndDate);
+  document.getElementById('date-input').value=tripStartDate||today;
   applyDateBounds();
   rh();
 }
@@ -1069,9 +1061,7 @@ async function doSearch(){
   if(!fromId||!toId){setStatus('Please select both origin and destination from the dropdown.');return;}
   if(!date){setStatus('Please select a departure date.');return;}
   if(tripType==='return'&&!date2){setStatus('Please select a return date.');return;}
-  // Defensive re-check — native min/max isn't bulletproof in every browser.
-  if((tripStartDate&&date<tripStartDate)||(tripEndDate&&date>tripEndDate)){setStatus('Departure date must be within the trip’s dates ('+tripStartDate+' to '+tripEndDate+').',true);return;}
-  if(date2&&((date2<date)||(tripEndDate&&date2>tripEndDate))){setStatus('Return date must be on or after departure and within the trip’s dates.',true);return;}
+  if(date2&&date2<date){setStatus('Return date must be on or after the departure date.',true);return;}
 
   // Clear previous
   allTrips=[];returnTrips=[];recheckUrls=[];
@@ -1114,7 +1104,7 @@ async function doSearch(){
 
       if(recheckUrls.length){
         document.getElementById('recheck-note').style.display='block';
-        recheckTimer=setTimeout(function(){pollRecheck(recheckUrls);},2000);
+        recheckTimer=setTimeout(function(){pollRecheck(recheckUrls,1);},2000);
       } else {
         document.getElementById('loading-bar').style.display='none';
       }
@@ -1177,17 +1167,31 @@ function fetchTransitSupplement(fromP,toP,d,targetArr,forceProvider){
   }).catch(function(){});
 }
 
-async function pollRecheck(urls){
+// The upstream search API answers some operators immediately and returns
+// recheck URLs for the slower ones (still crunching results server-side).
+// Keep polling those URLs until they stop returning anything new, or until
+// RECHECK_MAX_ATTEMPTS is hit — a single check often lands before the slow
+// operators have finished, which used to silently drop their results.
+var RECHECK_MAX_ATTEMPTS=5;
+var RECHECK_INTERVAL_MS=2000;
+async function pollRecheck(urls,attempt){
+  var gotNew=false;
   try{
     var data=await invoke('/recheck','POST',{urls:urls});
     var newTrips=data.trips||[];
     if(newTrips.length){
       newTrips.forEach(function(t){
-        if(!allTrips.find(function(x){return x.id===t.id;}))allTrips.push(t);
+        if(!allTrips.find(function(x){return x.id===t.id;})){allTrips.push(t);gotNew=true;}
       });
-      renderResults();
+      if(gotNew)renderResults();
     }
   }catch(_e){}
+
+  if(attempt<RECHECK_MAX_ATTEMPTS){
+    recheckTimer=setTimeout(function(){pollRecheck(urls,attempt+1);},RECHECK_INTERVAL_MS);
+    return;
+  }
+
   document.getElementById('loading-bar').style.display='none';
   document.getElementById('recheck-note').style.display='none';
   rh();
