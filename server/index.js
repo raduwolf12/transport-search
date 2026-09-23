@@ -10,6 +10,15 @@ async function tryAttempt(fn) {
   try { return await fn() } catch (e) { return { error: e?.message || String(e) } }
 }
 
+// A user's own key/value always wins; the instance-wide admin default
+// (ctx.config, set once under Admin → Plugins → Instance settings) only
+// covers users who haven't configured their own.
+async function resolveSetting(ctx, userKey, instanceKey) {
+  const userValue = await ctx.settings.get(userKey)
+  if (userValue) return userValue
+  return ctx.config?.[instanceKey] || undefined
+}
+
 // Shared headers that mimic a real browser request
 const HEADERS = {
   'accept': 'application/json, text/plain, */*',
@@ -25,6 +34,132 @@ async function fetchJson(url, _ctx) {
   return res.json()
 }
 
+// ── Operator logo proxy ──────────────────────────────────────────────────────
+// The sandboxed iframe's CSP only allows img-src 'self' data: blob: — a raw
+// https://traveling.com/... <img src> is blocked. Fetch each distinct logo
+// once server-side (network access is fine there — http:outbound:traveling.com
+// is granted) and inline it as a data: URI, which the CSP always allows.
+// In-process cache, capped, so repeat operators (same airline across many
+// results/searches) cost one fetch for the life of the plugin process.
+const LOGO_CACHE_MAX = 300
+const logoCache = new Map() // path -> data: URI | null (null = fetch failed, don't retry endlessly)
+
+async function fetchLogoDataUri(path) {
+  if (!path) return null
+  if (logoCache.has(path)) return logoCache.get(path)
+  let result = null
+  try {
+    const res = await fetch(`https://traveling.com/images/${path}`, { headers: HEADERS })
+    if (res.ok) {
+      const buf = Buffer.from(await res.arrayBuffer())
+      const contentType = res.headers.get('content-type') || 'image/png'
+      result = `data:${contentType};base64,${buf.toString('base64')}`
+    }
+  } catch (_e) { /* leave result null, e.g. a broken/expired logo path */ }
+  if (logoCache.size >= LOGO_CACHE_MAX) logoCache.delete(logoCache.keys().next().value)
+  logoCache.set(path, result)
+  return result
+}
+
+// Walks a normalized trips array and replaces each operators[].logo /
+// logoPath (currently raw https URLs built by normalizeTrip) with an inlined
+// data: URI, deduplicating fetches by logo path.
+async function inlineTripLogos(trips) {
+  const paths = new Set()
+  for (const t of trips) {
+    if (!t) continue
+    for (const o of t.operators || []) { if (o._logoPath) paths.add(o._logoPath) }
+  }
+  const entries = await Promise.all([...paths].map(async p => [p, await fetchLogoDataUri(p)]))
+  const map = new Map(entries)
+  for (const t of trips) {
+    if (!t) continue
+    for (const o of t.operators || []) {
+      if (o._logoPath) { o.logo = map.get(o._logoPath) || null; delete o._logoPath }
+    }
+    if (t.logoPath) { t.logoPath = map.get(t.logoPath) || null }
+  }
+  return trips
+}
+
+// ── Trip-currency conversion (rates:read) ────────────────────────────────────
+// traveling.com prices each fare in whatever currency the fare itself is
+// quoted in (a single search commonly mixes USD/EUR/GBP/etc) — riders want to
+// see everything in the trip's own currency instead. ctx.rates.get(base)
+// resolves a map of quote-currency -> rate PER 1 UNIT OF base, so converting
+// an amount FROM `fromCurrency` INTO `base` means dividing by rates[fromCurrency].
+const ratesCache = new Map() // base currency -> { rates, ts }
+const RATES_CACHE_TTL_MS = 60 * 60 * 1000 // host says "cached upstream" anyway; just avoid a call per request
+
+async function getRatesCached(ctx, base) {
+  const key = String(base).toUpperCase()
+  const cached = ratesCache.get(key)
+  if (cached && Date.now() - cached.ts < RATES_CACHE_TTL_MS) return cached.rates
+  const rates = await ctx.rates.get(key)
+  if (rates) ratesCache.set(key, { rates, ts: Date.now() })
+  return rates
+}
+
+async function getTripCurrency(ctx, tripId) {
+  if (!tripId) return null
+  try {
+    const trips = await ctx.trips.listMine()
+    return (trips || []).find(t => t.id === Number(tripId))?.currency || null
+  } catch (_e) { return null }
+}
+
+// Converts `amount` (quoted in `fromCurrency`) into `tripCurrency`. Falls back
+// to returning it unconverted (with `converted: false`) whenever either
+// currency is missing, they already match, or the rates broker can't help —
+// never throws, so a rates outage degrades to "show native currency" instead
+// of breaking the whole response.
+async function convertToTripCurrency(ctx, amount, fromCurrency, tripCurrency) {
+  if (!amount || !fromCurrency) return { amount, currency: fromCurrency, converted: false }
+  if (!tripCurrency || tripCurrency.toUpperCase() === fromCurrency.toUpperCase()) {
+    return { amount, currency: tripCurrency || fromCurrency, converted: false }
+  }
+  try {
+    const rates = await getRatesCached(ctx, tripCurrency)
+    const rate = rates?.[fromCurrency.toUpperCase()]
+    if (rate > 0) {
+      const converted = Math.round((amount / rate) * 100) / 100
+      return { amount: converted, currency: tripCurrency, converted: true, rate }
+    }
+  } catch (_e) { /* fall through to unconverted */ }
+  return { amount, currency: fromCurrency, converted: false }
+}
+
+// Walks a normalized trips array, converting each trip's price into
+// `tripCurrency` in place. One rates lookup total (getRatesCached caches by
+// base=tripCurrency, and that single map already covers every quote currency).
+async function convertTripsPricesToCurrency(trips, tripCurrency, ctx) {
+  if (!tripCurrency) return trips
+  for (const t of trips) {
+    if (!t || !t.price || !t.price.value || !t.price.currency) continue
+    const r = await convertToTripCurrency(ctx, t.price.value, t.price.currency, tripCurrency)
+    if (!r.converted) continue
+    t.price.value = r.amount
+    t.price.currency = r.currency
+    t.price.display = `${r.currency} ${Number(r.amount).toFixed(0)}`
+  }
+  return trips
+}
+
+// Same idea for rail passes — each class option's minPrice is
+// { value, fxcode } rather than { value, currency }, but otherwise identical.
+async function convertPassesToCurrency(passes, tripCurrency, ctx) {
+  if (!tripCurrency) return passes
+  for (const p of passes) {
+    for (const c of p.classes || []) {
+      if (!c.minPrice || !c.minPrice.value || !c.minPrice.fxcode) continue
+      const r = await convertToTripCurrency(ctx, c.minPrice.value, c.minPrice.fxcode, tripCurrency)
+      if (!r.converted) continue
+      c.minPrice = { value: r.amount, fxcode: r.currency }
+    }
+  }
+  return passes
+}
+
 // ── Supplemental Nordic domestic transit (Trafiklab/ResRobot for Sweden,
 // Rejseplanen for Denmark) ──────────────────────────────────────────────────
 // Traveling.com's own train coverage inside Sweden/Denmark is sometimes thin;
@@ -33,8 +168,8 @@ async function fetchJson(url, _ctx) {
 // supplement, not a replacement — and both happen to be the same underlying
 // HAFAS REST dialect, so they share all the parsing below.
 const HAFAS_PROVIDERS = {
-  trafiklab: { source: 'trafiklab', baseUrl: 'https://api.resrobot.se/v2.1', settingsKey: 'trafiklab_api_key', countryCode: 'SE', attribution: 'Trafiklab.se' },
-  rejseplanen: { source: 'rejseplanen', baseUrl: 'https://www.rejseplanen.dk/api', settingsKey: 'rejseplanen_api_key', countryCode: 'DK', attribution: 'Rejseplanen (rejseplanen.dk)' },
+  trafiklab: { source: 'trafiklab', baseUrl: 'https://api.resrobot.se/v2.1', settingsKey: 'trafiklab_api_key', instanceSettingsKey: 'trafiklab_api_key_instance', countryCode: 'SE', attribution: 'Trafiklab.se' },
+  rejseplanen: { source: 'rejseplanen', baseUrl: 'https://www.rejseplanen.dk/api', settingsKey: 'rejseplanen_api_key', instanceSettingsKey: 'rejseplanen_api_key_instance', countryCode: 'DK', attribution: 'Rejseplanen (rejseplanen.dk)' },
 }
 
 // "PT2H15M" / "PT45M" -> minutes
@@ -195,6 +330,7 @@ function normalizeHafasTrip(trip, i, provider) {
 // their volunteer-run, best-effort infrastructure.
 const TRANSITOUS_BASE = 'https://api.transitous.org/api'
 const TRANSITOUS_CONTACT_SETTINGS_KEY = 'transitous_contact'
+const TRANSITOUS_CONTACT_INSTANCE_SETTINGS_KEY = 'transitous_contact_instance'
 const TRANSITOUS_MONTHLY_CAP = 900 // no published limit; same self-imposed courtesy cap as the other providers
 
 // Full transit-mode enum verified against MOTIS's own OpenAPI spec (not an
@@ -316,6 +452,7 @@ function normalizeTransitousItinerary(itin, i, countryCode, tz) {
 // is written to degrade to empty results, not to error, so it's harmless to
 // leave wired in for whenever coverage expands.
 const TRANSITLAND_SETTINGS_KEY = 'transitland_api_key'
+const TRANSITLAND_INSTANCE_SETTINGS_KEY = 'transitland_api_key_instance'
 // Self-imposed courtesy cap. Kept under the real "Transitland Routing API -
 // Beta" plan's own limit (1,000 routing queries/month) with some headroom,
 // since that's the tighter of the two Transitland products this plugin uses
@@ -468,6 +605,7 @@ function normalizeTransitlandTrip(itin, i, countryCode) {
 // billing since Google just charges past its bundled free volume rather than
 // hard-blocking like Transitland's 401.
 const GOOGLE_ROUTES_SETTINGS_KEY = 'google_routes_api_key'
+const GOOGLE_ROUTES_INSTANCE_SETTINGS_KEY = 'google_routes_api_key_instance'
 const GOOGLE_ROUTES_MONTHLY_CAP = 9000 // headroom under the ~10k Compute Routes Essentials calls bundled free
 
 const GOOGLE_VEHICLE_MODE_MAP = {
@@ -732,7 +870,7 @@ module.exports = definePlugin({
       path: '/search',
       auth: true,
       async handler(req, ctx) {
-        const { fromId, toId, fromSlug, toSlug, fromCountrySlug, toCountrySlug, date, people, adults } = req.query
+        const { fromId, toId, fromSlug, toSlug, fromCountrySlug, toCountrySlug, date, people, adults, tripId } = req.query
         if (!fromId || !toId || !date) return safeJson(200, { error: 'fromId, toId, date required' })
 
         const p = people || '1'
@@ -752,12 +890,16 @@ module.exports = definePlugin({
           const trips = data.trips || []
           const recheck = data.recheck || []
           const token = data.token || null
+          const normalized = await inlineTripLogos(trips.map(normalizeTrip))
+          const tripCurrency = await getTripCurrency(ctx, tripId)
+          if (tripCurrency) await convertTripsPricesToCurrency(normalized, tripCurrency, ctx)
 
           return safeJson(200, {
-            trips: trips.map(normalizeTrip),
+            trips: normalized,
             recheck: recheck.length > 0,
             recheckUrls: recheck,
             token,
+            tripCurrency,
             fromId, toId, date,
           })
         } catch (e) {
@@ -787,22 +929,22 @@ module.exports = definePlugin({
         if (provider) {
           const hafasProvider = HAFAS_PROVIDERS[provider]
           if (hafasProvider) {
-            const apiKey = await ctx.settings.get(hafasProvider.settingsKey)
+            const apiKey = await resolveSetting(ctx, hafasProvider.settingsKey, hafasProvider.instanceSettingsKey)
             if (!apiKey) return safeJson(200, { trips: [], error: 'not_configured' })
             return safeJson(200, await tryHafasProvider(hafasProvider, fromName, toName, date, time, apiKey, ctx))
           }
           if (provider === 'transitous') {
-            const contact = await ctx.settings.get(TRANSITOUS_CONTACT_SETTINGS_KEY)
+            const contact = await resolveSetting(ctx, TRANSITOUS_CONTACT_SETTINGS_KEY, TRANSITOUS_CONTACT_INSTANCE_SETTINGS_KEY)
             if (!contact) return safeJson(200, { trips: [], error: 'not_configured' })
             return safeJson(200, await tryTransitous(fromName, toName, fc, date, time, contact, ctx))
           }
           if (provider === 'google_routes') {
-            const apiKey = await ctx.settings.get(GOOGLE_ROUTES_SETTINGS_KEY)
+            const apiKey = await resolveSetting(ctx, GOOGLE_ROUTES_SETTINGS_KEY, GOOGLE_ROUTES_INSTANCE_SETTINGS_KEY)
             if (!apiKey) return safeJson(200, { trips: [], error: 'not_configured' })
             return safeJson(200, await tryGoogleRoutes(fromName, fc, toName, tc, date, time, apiKey, ctx))
           }
           if (provider === 'transitland') {
-            const apiKey = await ctx.settings.get(TRANSITLAND_SETTINGS_KEY)
+            const apiKey = await resolveSetting(ctx, TRANSITLAND_SETTINGS_KEY, TRANSITLAND_INSTANCE_SETTINGS_KEY)
             if (!apiKey) return safeJson(200, { trips: [], error: 'not_configured' })
             return safeJson(200, await tryTransitland(fromName, toName, date, time, fc, apiKey, ctx))
           }
@@ -820,7 +962,7 @@ module.exports = definePlugin({
 
         const hafasProvider = Object.values(HAFAS_PROVIDERS).find(p => p.countryCode === fc)
         if (hafasProvider) {
-          const apiKey = await ctx.settings.get(hafasProvider.settingsKey)
+          const apiKey = await resolveSetting(ctx, hafasProvider.settingsKey, hafasProvider.instanceSettingsKey)
           if (apiKey) {
             anyConfigured = true
             const r = await tryHafasProvider(hafasProvider, fromName, toName, date, time, apiKey, ctx)
@@ -835,7 +977,7 @@ module.exports = definePlugin({
         // (currently US-only during its routing beta, so mostly a no-op
         // elsewhere for now). Each is skipped if unconfigured; the first to
         // return real results wins.
-        const transitousContact = await ctx.settings.get(TRANSITOUS_CONTACT_SETTINGS_KEY)
+        const transitousContact = await resolveSetting(ctx, TRANSITOUS_CONTACT_SETTINGS_KEY, TRANSITOUS_CONTACT_INSTANCE_SETTINGS_KEY)
         if (transitousContact) {
           anyConfigured = true
           const r = await tryTransitous(fromName, toName, fc, date, time, transitousContact, ctx)
@@ -843,7 +985,7 @@ module.exports = definePlugin({
           lastError = r.error
         }
 
-        const googleKey = await ctx.settings.get(GOOGLE_ROUTES_SETTINGS_KEY)
+        const googleKey = await resolveSetting(ctx, GOOGLE_ROUTES_SETTINGS_KEY, GOOGLE_ROUTES_INSTANCE_SETTINGS_KEY)
         if (googleKey) {
           anyConfigured = true
           const r = await tryGoogleRoutes(fromName, fc, toName, tc, date, time, googleKey, ctx)
@@ -851,7 +993,7 @@ module.exports = definePlugin({
           lastError = r.error
         }
 
-        const tlKey = await ctx.settings.get(TRANSITLAND_SETTINGS_KEY)
+        const tlKey = await resolveSetting(ctx, TRANSITLAND_SETTINGS_KEY, TRANSITLAND_INSTANCE_SETTINGS_KEY)
         if (tlKey) {
           anyConfigured = true
           const r = await tryTransitland(fromName, toName, date, time, fc, tlKey, ctx)
@@ -1020,23 +1162,15 @@ module.exports = definePlugin({
           // amount mislabeled as EUR.
           async function toTripCurrency(amount, fromCurrency) {
             if (!amount || !fromCurrency) return { amount, currency: fromCurrency, note: null }
-            let tripCurrency = null
-            try {
-              const trips = await ctx.trips.listMine()
-              tripCurrency = (trips || []).find(t => t.id === tripId)?.currency || null
-            } catch (_e) { tripCurrency = null }
-            if (!tripCurrency || tripCurrency.toUpperCase() === fromCurrency.toUpperCase()) {
-              return { amount, currency: tripCurrency || fromCurrency, note: null }
+            const tripCurrency = await getTripCurrency(ctx, tripId)
+            const r = await convertToTripCurrency(ctx, amount, fromCurrency, tripCurrency)
+            if (!tripCurrency || !r.converted) {
+              const note = tripCurrency && tripCurrency.toUpperCase() !== fromCurrency.toUpperCase()
+                ? `Could not convert ${fromCurrency} to ${tripCurrency} — recorded as ${fromCurrency} ${amount}, verify manually`
+                : null
+              return { amount: r.amount, currency: r.currency, note }
             }
-            try {
-              const rates = await ctx.rates.get(tripCurrency)
-              const rate = rates?.[fromCurrency.toUpperCase()]
-              if (rate > 0) {
-                const converted = Math.round((amount / rate) * 100) / 100
-                return { amount: converted, currency: tripCurrency, note: `Converted from ${fromCurrency} ${amount} at ~${rate.toFixed(4)} ${fromCurrency}/${tripCurrency}` }
-              }
-            } catch (_e) { /* fall through to unconverted */ }
-            return { amount, currency: fromCurrency, note: `Could not convert ${fromCurrency} to ${tripCurrency} — recorded as ${fromCurrency} ${amount}, verify manually` }
+            return { amount: r.amount, currency: r.currency, note: `Converted from ${fromCurrency} ${amount} at ~${r.rate.toFixed(4)} ${fromCurrency}/${tripCurrency}` }
           }
 
           const payload = {
@@ -1091,15 +1225,50 @@ module.exports = definePlugin({
       path: '/passes',
       auth: true,
       async handler(req, ctx) {
-        const { fromId, toId } = req.query
+        const { fromId, toId, tripId } = req.query
         if (!fromId || !toId) return safeJson(200, { passes: [] })
         try {
           const url = `https://traveling.com/api/nuxt/en/railpasses/hybridSearch?fromPlaceId=${encodeURIComponent(fromId)}&toPlaceId=${encodeURIComponent(toId)}`
           const data = await fetchJson(url, ctx)
           const passes = data.passes || []
-          return safeJson(200, { passes: passes.map(normalizePass) })
+          const normalized = passes.map(normalizePass)
+          const tripCurrency = await getTripCurrency(ctx, tripId)
+          if (tripCurrency) await convertPassesToCurrency(normalized, tripCurrency, ctx)
+          return safeJson(200, { passes: normalized })
         } catch (e) {
           return safeJson(200, { passes: [], error: e.message })
+        }
+      },
+    },
+
+    // ── Trip detail (baggage, cancellation policy, check-in requirements) ──────
+    // Fetched on demand when a user expands a card's "Details" panel — not
+    // included in the bulk /search results to keep that call cheap.
+    {
+      method: 'GET',
+      path: '/trip-info',
+      auth: true,
+      async handler(req, ctx) {
+        const { tripKey, depTime, seats, tripId } = req.query
+        if (!tripKey || !depTime) return safeJson(200, { error: 'tripKey and depTime required' })
+        try {
+          // The tripinfo endpoint keys its slug on trip_id + dep date/time, e.g.
+          // "DK0f6D0vOM9UDa00l03IGILV/2026-09-26-05-55-00" — same value as
+          // depTime ("2026-09-26 05:55:00") with space/colons turned to dashes.
+          const datePart = String(depTime).trim().replace(' ', '-').replace(/:/g, '-')
+          const slug = `${tripKey}/${datePart}`
+          const url = `https://traveling.com/api/nuxt/en/tripinfo?slug=${encodeURIComponent(slug)}` +
+            `&hash=&seats=${encodeURIComponent(seats || '1')}&autopack_id=&bringOutsideImageFirst=1&cartHash=&outboundTripKey=&outboundGodate=`
+          const data = await fetchJson(url, ctx)
+          const info = normalizeTripInfo(data)
+          const tripCurrency = await getTripCurrency(ctx, tripId)
+          if (tripCurrency && info.price) {
+            const r = await convertToTripCurrency(ctx, info.price.value, info.price.currency, tripCurrency)
+            if (r.converted) info.price = { value: r.amount, currency: r.currency }
+          }
+          return safeJson(200, info)
+        } catch (e) {
+          return safeJson(200, { error: e.message })
         }
       },
     },
@@ -1146,7 +1315,8 @@ function normalizeTrip(t) {
     operators: (t.operators || []).map(o => ({
       id: o.id,
       name: o.name,
-      logo: o.logo ? `https://traveling.com/images/${o.logo.path}` : null,
+      logo: null,
+      _logoPath: o.logo?.path || null,
       rating: o.rating,
     })),
     price: {
@@ -1209,6 +1379,41 @@ function normalizePass(p) {
     regions: (p.regions || []).map(r => r.name),
     available: p.available,
     slug: p.slug,
+  }
+}
+
+// The tripinfo API returns policy/check-in text as raw HTML (<ul><li>…</li></ul>).
+// That's third-party content — never inject it as innerHTML client-side (XSS
+// risk). Extract it into plain-text lines here so the client only ever
+// textContent's it.
+function htmlToLines(html) {
+  if (!html) return []
+  const items = [...String(html).matchAll(/<li[^>]*>([\s\S]*?)<\/li>/gi)].map(m => m[1])
+  const source = items.length ? items : [String(html)]
+  return source
+    .map(h => h.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+}
+
+function normalizeTripInfo(data) {
+  const opt = (data.travel_options || [])[0] || {}
+  const segments = (data.segments || []).filter(s => s.type === 'route')
+  const price = opt.price || data.min_price || {}
+  return {
+    price: price.value ? { value: price.value, currency: price.fxcode || null } : null,
+    amenities: opt.amenities || [],
+    baggage: opt.baggage && opt.baggage.value !== -1 ? opt.baggage : null,
+    isRefundable: !!opt.is_generally_refundable,
+    cancellationMessage: opt.cancellation_message || null,
+    confirmationMessage: opt.confirmation_message || null,
+    fullRefundUntil: opt.full_refund_until || null,
+    rating: opt.rating ?? null,
+    ratingCount: opt.rating_count ?? null,
+    segments: segments.map(s => ({
+      flightNo: s.official_id || null,
+      operator: s.operator?.name || null,
+      checkIn: htmlToLines(s.info),
+    })),
   }
 }
 

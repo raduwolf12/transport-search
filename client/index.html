@@ -635,8 +635,9 @@ body.trek-ui {
 })();</script>
   <style>
     *{box-sizing:border-box;}
-    body{margin:0;padding:0;}
-    .page{padding:20px 24px 28px;}
+    html,body{height:100%;margin:0;padding:0;}
+    body{display:flex;flex-direction:column;overflow:hidden;}
+    .page{flex:1 1 auto;min-height:0;overflow-y:auto;padding:20px 24px 28px;}
 
     /* Search bar */
     .search-bar{display:grid;grid-template-columns:1fr 1fr auto auto auto;gap:8px;align-items:end;margin-bottom:16px;}
@@ -731,6 +732,19 @@ body.trek-ui {
     .seg-flight{font-size:11px;font-weight:700;color:var(--accent);}
     .wait-row{padding:3px 0 3px 56px;font-size:11px;color:var(--warning);}
     .expand-btn{background:none;border:none;color:var(--text-faint);font-size:11.5px;cursor:pointer;padding:6px 0 0;font-family:inherit;}
+    .expand-row{display:flex;gap:14px;flex-wrap:wrap;}
+
+    /* Trip details expand (baggage, cancellation, check-in) */
+    .trip-details{margin-top:10px;border-top:1px solid var(--border-secondary);padding-top:10px;display:none;}
+    .trip-details.open{display:block;}
+    .details-grid{display:flex;flex-wrap:wrap;gap:16px;margin-bottom:8px;}
+    .details-item{font-size:12px;color:var(--text-secondary);}
+    .details-item b{color:var(--text-primary);}
+    .amenity-chip{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--text-muted);background:var(--bg-tertiary);border-radius:20px;padding:3px 9px;margin:0 5px 5px 0;}
+    .details-section-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text-faint);margin:8px 0 4px;}
+    .details-list{margin:0;padding-left:16px;font-size:12px;color:var(--text-muted);line-height:1.6;}
+    .details-loading,.details-error{font-size:12px;color:var(--text-faint);padding:4px 0;}
+    .details-error{color:var(--danger);}
 
     /* Rail passes */
     .passes-section{margin-top:20px;border-top:1px solid var(--border-primary);padding-top:16px;}
@@ -1086,7 +1100,8 @@ async function doSearch(){
       return '/search?fromId='+encodeURIComponent(fId)+'&toId='+encodeURIComponent(tId)+
         '&fromSlug='+encodeURIComponent(fSlug)+'&toSlug='+encodeURIComponent(tSlug)+
         '&fromCountrySlug='+encodeURIComponent(fCS)+'&toCountrySlug='+encodeURIComponent(tCS)+
-        '&date='+encodeURIComponent(d)+'&people='+pax+'&adults='+pax;
+        '&date='+encodeURIComponent(d)+'&people='+pax+'&adults='+pax+
+        '&tripId='+encodeURIComponent(currentTripId||'');
     }
 
     try{
@@ -1110,7 +1125,7 @@ async function doSearch(){
       }
 
       // Rail passes concurrently
-      invoke('/passes?fromId='+encodeURIComponent(fromId)+'&toId='+encodeURIComponent(toId),'GET')
+      invoke('/passes?fromId='+encodeURIComponent(fromId)+'&toId='+encodeURIComponent(toId)+'&tripId='+encodeURIComponent(currentTripId||''),'GET')
         .then(function(pd){if(pd.passes&&pd.passes.length)renderPasses(pd.passes);})
         .catch(function(){});
     }catch(e){
@@ -1263,7 +1278,7 @@ function renderResults(){
     attr.style.cssText='font-size:10.5px;color:var(--text-faint);text-align:right;padding:6px 2px 0;';
     var parts=supKeys.map(function(s){
       if(s==='transitous'){
-        return 'Routing by <a href="https://transitous.org/sources/" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;">Transitous</a> · map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;">OpenStreetMap</a> contributors';
+        return 'Routing by <a href="#" onclick="trek.openExternal(&apos;https://transitous.org/sources/&apos;);return false;" style="color:inherit;text-decoration:underline;">Transitous</a> · map data © <a href="#" onclick="trek.openExternal(&apos;https://www.openstreetmap.org/copyright&apos;);return false;" style="color:inherit;text-decoration:underline;">OpenStreetMap</a> contributors';
       }
       return 'Public transit data from '+escHtml(SUPPLEMENT_SOURCE_LABEL[s]);
     });
@@ -1298,6 +1313,8 @@ function renderTripCard(t,idx,list){
     var dur=fmtDur(t.durationMin);
     var opNames=(t.operators||[]).map(function(o){return o.name;}).join(' + ');
     var firstLogo=(t.operators||[])[0]?.logo;
+    var flightNos=(t.segments||[]).map(function(s){return s.flightNo;}).filter(Boolean);
+    var flightNoText=flightNos.length?flightNos.join(' · '):'';
 
     // Layover summary
     var stopText='';
@@ -1329,6 +1346,7 @@ function renderTripCard(t,idx,list){
           '<div class="trip-operator">'+
             (firstLogo?'<img class="op-logo" src="'+escHtml(firstLogo)+'" onerror="this.style.visibility=&apos;hidden&apos;"/>':'')+
             '<span>'+escHtml(opNames||(isSupplemental?'Public transit':''))+'</span>'+
+            (flightNoText?'<span style="color:var(--text-faint)">· '+escHtml(flightNoText)+'</span>':'')+
             (t.class?'<span style="color:var(--text-faint)">· '+escHtml(t.class)+'</span>':'')+
           '</div>'+
           (featHtml?'<div class="trip-features">'+featHtml+'</div>':'')+
@@ -1342,6 +1360,9 @@ function renderTripCard(t,idx,list){
           '<button class="btn-book" data-idx="'+idx+'" onclick="handleBook(this)">'+(t.isBookable?'Book':'Save')+'</button>'+
         '</div>'+
       '</div>';
+
+    var expandRow=document.createElement('div');expandRow.className='expand-row';
+    var hasExpandRow=false;
 
     // Expandable segments for multi-stop
     if(t.isMultiSegment){
@@ -1366,11 +1387,77 @@ function renderTripCard(t,idx,list){
         btn.textContent=(open?'▼ Hide':'▶ Show')+' '+t.segments.length+' segments';
         rh();
       });
-      card.appendChild(btn);
+      expandRow.appendChild(btn);
+      hasExpandRow=true;
       card.appendChild(segDiv);
     }
 
+    // Expandable details (baggage, cancellation policy, check-in) — fetched
+    // on demand from traveling.com's tripinfo endpoint, not the search list.
+    if(!isSupplemental&&t.tripKey){
+      var dBtn=document.createElement('button');dBtn.className='expand-btn';
+      dBtn.textContent='▶ Details';
+      var dDiv=document.createElement('div');dDiv.className='trip-details';
+      var dLoaded=false,dLoading=false;
+      dBtn.addEventListener('click',function(){
+        var open=dDiv.classList.toggle('open');
+        dBtn.textContent=(open?'▼ Hide':'▶ Show')+' details';
+        if(open&&!dLoaded&&!dLoading){
+          dLoading=true;
+          dDiv.innerHTML='<div class="details-loading">Loading details…</div>';
+          var qs='/trip-info?tripKey='+encodeURIComponent(t.tripKey)+'&depTime='+encodeURIComponent(t.depTime||'')+'&seats='+encodeURIComponent(pax)+'&tripId='+encodeURIComponent(currentTripId||'');
+          invoke(qs,'GET').then(function(info){
+            dLoading=false;
+            if(info&&!info.error){dLoaded=true;renderTripDetails(dDiv,info);}
+            else{dDiv.innerHTML='<div class="details-error">Couldn\'t load details'+(info&&info.error?': '+escHtml(info.error):'')+'</div>';}
+            rh();
+          }).catch(function(e){
+            dLoading=false;
+            dDiv.innerHTML='<div class="details-error">Couldn\'t load details: '+escHtml(e.message)+'</div>';
+            rh();
+          });
+        }
+        rh();
+      });
+      expandRow.appendChild(dBtn);
+      hasExpandRow=true;
+      card.appendChild(dDiv);
+    }
+
+    if(hasExpandRow)card.appendChild(expandRow);
+
     list.appendChild(card);
+}
+
+// Renders the /trip-info response (amenities, baggage, cancellation policy,
+// check-in requirements) into a details panel. All text goes through
+// textContent/escHtml — the source HTML from the API is untrusted third-party
+// content, already reduced to plain-text lines server-side.
+function renderTripDetails(el,info){
+  var AMENITY_LABEL={aircon:'Air conditioning',wc:'Toilet',steward:'Flight attendant',wifi:'Wi-Fi'};
+  var html='';
+  if((info.amenities||[]).length){
+    html+='<div class="details-grid">'+info.amenities.map(function(a){
+      return '<span class="amenity-chip">'+escHtml(AMENITY_LABEL[a]||a)+'</span>';
+    }).join('')+'</div>';
+  }
+  var facts=[];
+  if(info.price)facts.push('<div class="details-item"><b>Price:</b> '+escHtml((info.price.currency||'')+' '+Number(info.price.value).toFixed(2))+'</div>');
+  if(info.baggage)facts.push('<div class="details-item"><b>Baggage:</b> '+escHtml(String(info.baggage.value))+'kg</div>');
+  if(info.confirmationMessage)facts.push('<div class="details-item"><b>Confirmation:</b> '+escHtml(info.confirmationMessage)+'</div>');
+  if(info.cancellationMessage)facts.push('<div class="details-item"><b>Cancellation:</b> '+escHtml(info.cancellationMessage)+'</div>');
+  if(info.rating)facts.push('<div class="details-item"><b>Rating:</b> '+escHtml(String(info.rating))+(info.ratingCount?' ('+escHtml(String(info.ratingCount))+' reviews)':'')+'</div>');
+  if(facts.length)html+='<div class="details-grid">'+facts.join('')+'</div>';
+
+  (info.segments||[]).forEach(function(s){
+    if(s.checkIn&&s.checkIn.length){
+      html+='<div class="details-section-title">'+escHtml(s.flightNo?(s.operator?s.operator+' '+s.flightNo:s.flightNo):'Check-in')+'</div>';
+      html+='<ul class="details-list">'+s.checkIn.map(function(line){return '<li>'+escHtml(line)+'</li>';}).join('')+'</ul>';
+    }
+  });
+
+  if(!html)html='<div class="details-loading">No additional details available.</div>';
+  el.innerHTML=html;
 }
 
 function renderPasses(passes){
@@ -1476,10 +1563,10 @@ async function openBookingUrl(trip){
     '&fromSlug='+encodeURIComponent(fromSlug)+'&toSlug='+encodeURIComponent(toSlug);
   try{
     var data=await invoke(qs,'GET');
-    if(data.url)window.open(data.url,'_blank');
+    if(data.url)trek.openExternal(data.url);
   }catch(_e){
     var url='https://traveling.com/en/travel/'+fromSlug+'/'+toSlug;
-    window.open(url,'_blank');
+    trek.openExternal(url);
   }
 }
 
