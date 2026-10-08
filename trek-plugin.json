@@ -1,10 +1,10 @@
 {
   "id": "transport-search",
   "name": "Transport Search",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "apiVersion": 1,
   "type": "trip-page",
-  "trek": ">=4.2.0 <5.0.0",
+  "trek": ">=4.2.0 <6.0.0",
   "author": "raduwolf12",
   "description": "Search buses, trains, flights and transfers between any two places via Traveling.com. Browse results, filter by transport type, and open booking links.",
   "icon": "Search",
